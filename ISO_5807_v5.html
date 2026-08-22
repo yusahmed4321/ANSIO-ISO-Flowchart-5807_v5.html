@@ -1,0 +1,1250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>ISO 5807 Flowchart Editor v5</title>
+<style>
+  :root{
+    --bg:#f0f2f5;--panel:#ffffff;--panel-2:#f7f8fa;--border:#dde1e7;
+    --text:#1a1f2e;--muted:#6b7280;--accent:#2563eb;--accent-soft:#eff6ff;
+    --danger:#dc2626;--selected:#2563eb;--toolbar-h:46px;--font-bar-h:44px;
+    --insp-w:258px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden}
+  body{font:13px/1.4 system-ui,'Segoe UI',sans-serif;color:var(--text);background:var(--bg);display:flex;flex-direction:column}
+
+  /* ─── Toolbars ─────────────────────────────────────── */
+  .toolbar{background:var(--panel);border-bottom:1px solid var(--border);flex-shrink:0}
+  .trow{height:var(--toolbar-h);display:flex;align-items:center;padding:0 10px;gap:4px;flex-wrap:nowrap;overflow:hidden}
+  .trow+.trow{height:var(--font-bar-h);border-top:1px solid var(--border)}
+  .toolbar-title{font-size:13px;font-weight:700;letter-spacing:-.2px;margin-right:8px;white-space:nowrap}
+  .sep{width:1px;height:22px;background:var(--border);margin:0 3px;flex-shrink:0}
+  .tbtn{border:1px solid transparent;background:transparent;color:var(--text);padding:5px 9px;border-radius:6px;cursor:pointer;font-size:12px;white-space:nowrap;flex-shrink:0;line-height:1}
+  .tbtn:hover{background:var(--panel-2);border-color:var(--border)}
+  .tbtn.active{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+  .tbtn.danger:hover{background:#fef2f2;border-color:var(--danger);color:var(--danger)}
+  .tbtn.fmt{min-width:30px;font-size:13px;padding:4px 6px}
+  .tbtn.fmt.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+  select.tsel{padding:4px 6px;border:1px solid var(--border);border-radius:6px;background:var(--panel-2);font:12px inherit;color:var(--text);cursor:pointer;outline:none}
+  select.tsel:hover{border-color:var(--accent)}
+  select.tsel:focus{border-color:var(--accent);background:#fff}
+  .tsel.w-font{width:110px}
+  .tsel.w-size{width:54px}
+  .zoom-badge{font-size:12px;color:var(--muted);min-width:40px;text-align:center;font-variant-numeric:tabular-nums}
+  .spacer{flex:1}
+  .margin-row{display:flex;align-items:center;gap:6px}
+  #margin-range{width:72px;cursor:pointer;accent-color:var(--accent)}
+  .margin-label{font-size:11px;color:var(--muted);min-width:26px}
+
+  /* ─── Hint bar (row 1 right side) — keyboard shortcuts ── */
+  #hint-bar{
+    display:flex;align-items:center;gap:8px;
+    background:var(--panel-2);border:1px solid var(--border);
+    border-radius:6px;padding:4px 10px;
+    font-size:11px;color:var(--muted);
+    white-space:nowrap;flex-shrink:0;
+  }
+  #hint-bar .kbd{
+    display:inline-block;padding:1px 5px;
+    background:#fff;border:1px solid var(--border);border-radius:3px;
+    font-family:ui-monospace,monospace;font-size:10px;color:var(--text);
+    font-weight:600;
+  }
+  #hint-bar .hk{display:flex;align-items:center;gap:3px}
+  #hint-bar .hk-sep{width:1px;height:14px;background:var(--border)}
+
+  /* ─── Main layout ───────────────────────────────────── */
+  .main{flex:1;display:flex;min-height:0}
+
+  /* ─── Palette ───────────────────────────────────────── */
+  .palette{width:196px;background:var(--panel);border-right:1px solid var(--border);overflow-y:auto;padding:10px 8px;flex-shrink:0}
+  .palette h3{font-size:10.5px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);margin:8px 4px 6px;font-weight:600}
+  .pal-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .pal-item{background:var(--panel-2);border:1px solid var(--border);border-radius:7px;padding:8px 4px 5px;text-align:center;cursor:grab;user-select:none;transition:border-color .12s,background .12s}
+  .pal-item:hover{border-color:var(--accent);background:var(--accent-soft)}
+  .pal-item svg{width:62px;height:34px;display:block;margin:0 auto 4px}
+  .pal-item .pal-lbl{font-size:10px;color:var(--muted);line-height:1.3}
+
+  /* ─── Canvas outer (scrollable viewport) ───────────── */
+  .canvas-outer{flex:1;overflow:scroll;background:var(--bg);position:relative}
+  .canvas-outer::-webkit-scrollbar{width:14px;height:14px}
+  .canvas-outer::-webkit-scrollbar-track{background:var(--panel-2)}
+  .canvas-outer::-webkit-scrollbar-thumb{background:#bcc3ce;border-radius:7px;border:3px solid var(--panel-2)}
+  .canvas-outer::-webkit-scrollbar-thumb:hover{background:#9ba3af}
+  .canvas-outer::-webkit-scrollbar-corner{background:var(--panel-2)}
+  .canvas-outer.connect-mode{cursor:crosshair}
+  .canvas-outer.placing{cursor:copy}
+  .canvas-zoom{display:inline-block;transform-origin:0 0;position:relative;min-width:1600px;min-height:1200px}
+  #svg{display:block;
+    background:
+      radial-gradient(circle,#c8ccd4 1px,transparent 1px) 0 0/18px 18px,
+      #f7f8fa}
+
+  /* ─── Inspector (collapsible slide-in panel) ────────── */
+  .insp-wrapper{
+    position:relative;
+    display:flex;
+    flex-shrink:0;
+    /* width is controlled by JS toggle */
+    width:var(--insp-w);
+    transition:width .22s ease;
+  }
+  .insp-wrapper.closed{
+    width:16px; /* just the toggle tab */
+  }
+
+  /* The toggle tab sticks to the left edge of the wrapper */
+  .insp-toggle{
+    position:absolute;
+    left:0; top:50%;
+    transform:translateY(-50%);
+    width:16px;
+    height:56px;
+    background:var(--panel);
+    border:1px solid var(--border);
+    border-right:none;
+    border-radius:6px 0 0 6px;
+    cursor:pointer;
+    display:flex;align-items:center;justify-content:center;
+    font-size:11px;color:var(--muted);
+    z-index:10;
+    user-select:none;
+    transition:background .12s;
+  }
+  .insp-toggle:hover{background:var(--accent-soft);color:var(--accent)}
+  .insp-toggle-arrow{
+    display:block;
+    font-size:10px;
+    line-height:1;
+    transition:transform .22s;
+  }
+  .insp-wrapper.closed .insp-toggle-arrow{transform:rotate(180deg)}
+
+  .inspector{
+    flex:1;
+    background:var(--panel);
+    border-left:1px solid var(--border);
+    padding:12px 12px 12px 20px; /* extra left padding to clear the toggle tab */
+    overflow-y:auto;
+    display:flex;
+    flex-direction:column;
+    gap:0;
+    transition:opacity .18s, visibility .18s;
+  }
+  .insp-wrapper.closed .inspector{
+    opacity:0;
+    visibility:hidden;
+    pointer-events:none;
+  }
+
+  .insp-section{margin-bottom:12px}
+  .insp-h3{font-size:10.5px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);font-weight:600;margin-bottom:8px}
+  .field{margin-bottom:10px}
+  .field label{display:block;font-size:11px;color:var(--muted);margin-bottom:3px}
+  .field input,.field textarea,.field select{width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:5px;background:var(--panel-2);font:inherit;color:var(--text)}
+  .field textarea{resize:vertical;min-height:52px}
+  .field input:focus,.field textarea:focus,.field select:focus{outline:none;border-color:var(--accent);background:#fff}
+  .row2{display:flex;gap:6px}.row2>*{flex:1}
+  .fmt-row{display:flex;gap:4px;margin-top:5px}
+  .fmt-btn{flex:1;padding:5px;border:1px solid var(--border);background:var(--panel-2);border-radius:5px;cursor:pointer;font-size:13px;text-align:center;transition:all .12s}
+  .fmt-btn:hover{border-color:var(--accent);background:var(--accent-soft)}
+  .fmt-btn.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+  .empty-state{color:var(--muted);font-size:12px;text-align:center;padding:16px 8px;line-height:1.8}
+  .kbd{display:inline-block;padding:1px 5px;background:var(--panel-2);border:1px solid var(--border);border-radius:3px;font-family:ui-monospace,monospace;font-size:10px}
+
+  /* Close button inside the panel */
+  .insp-close-btn{
+    display:flex;align-items:center;justify-content:space-between;
+    margin-bottom:10px;padding-bottom:8px;
+    border-bottom:1px solid var(--border);
+  }
+  .insp-close-btn span{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .insp-close-btn button{
+    background:var(--panel-2);border:1px solid var(--border);
+    border-radius:5px;padding:3px 8px;font-size:11px;
+    cursor:pointer;color:var(--muted);
+  }
+  .insp-close-btn button:hover{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+
+  /* ─── SVG node / edge styles ────────────────────────── */
+  .node-group{cursor:move}
+  .node-shape{fill:#ffffff;stroke:#374151;stroke-width:1.6;stroke-linejoin:round}
+  .node-group.selected .node-shape{stroke:var(--selected);stroke-width:2.4}
+  .edge-line{stroke:#374151;stroke-width:1.6;fill:none}
+  .edge-line.annotation{stroke-dasharray:5 4}
+  .edge-line.selected{stroke:var(--selected);stroke-width:2.4}
+  .edge-hit{stroke:transparent;stroke-width:16;fill:none;cursor:pointer}
+  .edge-label{font:11px system-ui,sans-serif;fill:var(--muted);text-anchor:middle;paint-order:stroke;stroke:#f7f8fa;stroke-width:4}
+
+  /* inline text edit overlay */
+  .edit-overlay{position:fixed;background:#fff;border:2px solid var(--accent);border-radius:5px;padding:5px 7px;z-index:200;box-shadow:0 4px 20px rgba(0,0,0,.18);text-align:center;resize:none}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════
+     TOOLBAR ROW 1 — Tools & Actions
+════════════════════════════════════════════ -->
+<div class="toolbar">
+  <div class="trow">
+    <span class="toolbar-title">ISO 5807 Flowchart Editor v5</span>
+    <button class="tbtn" id="btn-undo" title="Undo (Ctrl+Z)" style="font-size:15px">↩</button>
+    <button class="tbtn" id="btn-redo" title="Redo (Ctrl+Y)" style="font-size:15px">↪</button>
+    <div class="sep"></div>
+    <button class="tbtn active" id="tool-select">▭ Select</button>
+    <button class="tbtn" id="tool-connect">→ Connect</button>
+    <div class="sep"></div>
+    <button class="tbtn danger" id="btn-delete">✕ Delete</button>
+    <button class="tbtn" id="btn-clear">⟲ Clear</button>
+    <div class="sep"></div>
+    <button class="tbtn" id="btn-export-svg">⤓ SVG</button>
+    <button class="tbtn" id="btn-export-png">⤓ PNG</button>
+    <button class="tbtn" id="btn-export-json">⤓ JSON</button>
+    <button class="tbtn" id="btn-import-json">⤒ Import</button>
+    <input type="file" id="import-file" accept=".json" style="display:none">
+    <div class="sep"></div>
+    <button class="tbtn" id="btn-zoom-out" title="Zoom Out (Ctrl −)">−</button>
+    <span class="zoom-badge" id="zoom-badge">100%</span>
+    <button class="tbtn" id="btn-zoom-in" title="Zoom In (Ctrl +)">+</button>
+    <button class="tbtn" id="btn-zoom-fit" title="Fit to window">⊡</button>
+    <button class="tbtn" id="btn-zoom-100" title="Reset 100%">1:1</button>
+    <div class="spacer"></div>
+    <!-- Keyboard shortcuts hint bar replacing the old hint text -->
+    <div id="hint-bar">
+      <div class="hk"><span class="kbd">Del</span><span>Delete</span></div>
+      <div class="hk-sep"></div>
+      <div class="hk"><span class="kbd">Esc</span><span>Cancel</span></div>
+      <div class="hk-sep"></div>
+      <div class="hk"><span class="kbd">Dbl-click</span><span>Edit text</span></div>
+      <div class="hk-sep"></div>
+      <div class="hk"><span class="kbd">Ctrl ±</span><span>Zoom</span></div>
+      <div class="hk-sep"></div>
+      <div class="hk"><span class="kbd">Ctrl scroll</span><span>Zoom</span></div>
+    </div>
+  </div>
+
+  <!-- TOOLBAR ROW 2 — Text Formatting -->
+  <div class="trow" id="font-bar">
+    <span style="font-size:11px;color:var(--muted);flex-shrink:0">Font:</span>
+    <select class="tsel w-font" id="tb-font-family">
+      <option value="Calibri,Arial,sans-serif">Calibri</option>
+      <option value="Arial,sans-serif">Arial</option>
+      <option value="'Arial Narrow',Arial,sans-serif">Arial Narrow</option>
+      <option value="Helvetica,Arial,sans-serif">Helvetica</option>
+      <option value="'Times New Roman',serif">Times New Roman</option>
+      <option value="Georgia,serif">Georgia</option>
+      <option value="'Courier New',monospace">Courier New</option>
+    </select>
+    <select class="tsel w-size" id="tb-font-size">
+      <option>8</option><option>9</option><option>10</option><option>11</option>
+      <option selected>12</option><option>14</option><option>16</option><option>18</option>
+      <option>20</option><option>24</option><option>28</option><option>32</option>
+      <option>36</option><option>48</option><option>72</option>
+    </select>
+    <div class="sep"></div>
+    <button class="tbtn fmt" id="tb-bold"  title="Bold (Ctrl+B)" style="font-weight:700">B</button>
+    <button class="tbtn fmt" id="tb-italic" title="Italic (Ctrl+I)" style="font-style:italic">I</button>
+    <button class="tbtn fmt" id="tb-under"  title="Underline (Ctrl+U)" style="text-decoration:underline">U</button>
+    <div class="sep"></div>
+    <span style="font-size:11px;color:var(--muted);flex-shrink:0">Margin:</span>
+    <div class="margin-row">
+      <input type="range" id="margin-range" min="4" max="48" value="14" title="Text padding inside shape">
+      <span class="margin-label" id="margin-lbl">14</span>
+    </div>
+    <div class="sep"></div>
+    <span style="font-size:11px;color:var(--muted)">Shapes auto-expand · Ctrl+scroll to zoom</span>
+    <div class="spacer"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     MAIN AREA
+════════════════════════════════════════════ -->
+<div class="main">
+
+  <!-- Palette -->
+  <aside class="palette">
+    <h3>Basic</h3>
+    <div class="pal-grid" id="pal-basic"></div>
+    <h3 style="margin-top:14px">Other</h3>
+    <div class="pal-grid" id="pal-other"></div>
+  </aside>
+
+  <!-- Scrollable canvas -->
+  <div class="canvas-outer" id="canvas-outer">
+    <div class="canvas-zoom" id="canvas-zoom">
+      <svg id="svg" width="1600" height="1200" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="ah"  markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3z" fill="#374151"/></marker>
+          <marker id="ahs" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3z" fill="#2563eb"/></marker>
+        </defs>
+        <g id="edges-layer"></g>
+        <g id="nodes-layer"></g>
+      </svg>
+    </div>
+  </div>
+
+  <!-- Inspector (collapsible) -->
+  <div class="insp-wrapper" id="insp-wrapper">
+    <!-- Toggle tab on the left edge -->
+    <div class="insp-toggle" id="insp-toggle" title="Toggle properties panel">
+      <span class="insp-toggle-arrow">◀</span>
+    </div>
+    <aside class="inspector" id="inspector">
+      <!-- Close row inside panel -->
+      <div class="insp-close-btn">
+        <span>Properties</span>
+        <button id="insp-close-inner" title="Close panel">✕ Close</button>
+      </div>
+      <div id="insp-empty" style="display:none"></div>
+      <div id="insp-content" style="display:none">
+        <div class="insp-section">
+          <div class="insp-h3" id="insp-title">Properties</div>
+          <div class="field">
+            <label>Label</label>
+            <textarea id="insp-text" rows="3"></textarea>
+          </div>
+        </div>
+        <div class="insp-section">
+          <div class="insp-h3">Text Style</div>
+          <div class="field">
+            <label>Font family</label>
+            <select id="insp-ff">
+              <option value="Calibri,Arial,sans-serif">Calibri</option>
+              <option value="Arial,sans-serif">Arial</option>
+              <option value="'Arial Narrow',Arial,sans-serif">Arial Narrow</option>
+              <option value="Helvetica,Arial,sans-serif">Helvetica</option>
+              <option value="'Times New Roman',serif">Times New Roman</option>
+              <option value="Georgia,serif">Georgia</option>
+              <option value="'Courier New',monospace">Courier New</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Font size (pt)</label>
+            <select id="insp-fs">
+              <option>8</option><option>9</option><option>10</option><option>11</option>
+              <option selected>12</option><option>14</option><option>16</option><option>18</option>
+              <option>20</option><option>24</option><option>28</option><option>32</option>
+              <option>36</option><option>48</option><option>72</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Style</label>
+            <div class="fmt-row">
+              <button class="fmt-btn" id="insp-bold"  style="font-weight:700">B</button>
+              <button class="fmt-btn" id="insp-italic" style="font-style:italic">I</button>
+              <button class="fmt-btn" id="insp-under"  style="text-decoration:underline">U</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Text margin <span id="insp-mg-lbl" style="color:var(--text)">14px</span></label>
+            <input type="range" id="insp-mg" min="4" max="48" value="14" style="width:100%;accent-color:var(--accent)">
+          </div>
+        </div>
+        <div class="insp-section">
+          <div class="insp-h3">Geometry</div>
+          <div class="field"><label>Position (x, y)</label><div class="row2"><input type="number" id="insp-x"><input type="number" id="insp-y"></div></div>
+          <div class="field"><label>Size — expands to fit text</label><div class="row2"><input type="number" id="insp-w" min="40"><input type="number" id="insp-h" min="30"></div></div>
+        </div>
+        <div id="edge-section" style="display:none" class="insp-section">
+          <div class="insp-h3">Flowline</div>
+          <div class="field"><label>Label (Yes / No / etc.)</label><input type="text" id="insp-edge-lbl"></div>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────────────
+//  Constants & DOM refs
+// ─────────────────────────────────────────────────────
+const NS='http://www.w3.org/2000/svg';
+const svg=document.getElementById('svg');
+const nodesL=document.getElementById('nodes-layer');
+const edgesL=document.getElementById('edges-layer');
+const canvasOuter=document.getElementById('canvas-outer');
+const canvasZoom=document.getElementById('canvas-zoom');
+
+// ─────────────────────────────────────────────────────
+//  Inspector toggle (open/close)
+// ─────────────────────────────────────────────────────
+const inspWrapper=document.getElementById('insp-wrapper');
+const inspToggle =document.getElementById('insp-toggle');
+const inspCloseInner=document.getElementById('insp-close-inner');
+
+function setInspectorOpen(open){
+  if(open){
+    inspWrapper.classList.remove('closed');
+    inspToggle.querySelector('.insp-toggle-arrow').textContent='▶';
+    inspToggle.title='Close properties panel';
+  } else {
+    inspWrapper.classList.add('closed');
+    inspToggle.querySelector('.insp-toggle-arrow').textContent='◀';
+    inspToggle.title='Open properties panel';
+  }
+}
+
+inspToggle.addEventListener('click',()=>{
+  const isOpen=!inspWrapper.classList.contains('closed');
+  setInspectorOpen(!isOpen);
+});
+inspCloseInner.addEventListener('click',()=>setInspectorOpen(false));
+
+// Auto-open when a shape is selected
+function ensureInspectorOpen(){
+  setInspectorOpen(true);
+}
+
+// ─────────────────────────────────────────────────────
+//  Zoom management
+// ─────────────────────────────────────────────────────
+// Fix #6: SVG canvas grows dynamically to content bounds instead of a fixed 3200×2400 surface.
+// applyZoom reads the live SVG dimensions so it stays accurate.
+const SVG_PAD=400; // extra space beyond the furthest node
+function resizeSVGToContent(){
+  if(!state.nodes.length){
+    svg.setAttribute('width',1600); svg.setAttribute('height',1200);
+    canvasZoom.style.minWidth='1600px'; canvasZoom.style.minHeight='1200px';
+    return;
+  }
+  let x1=-Infinity,y1=-Infinity;
+  state.nodes.forEach(n=>{x1=Math.max(x1,n.x+n.w);y1=Math.max(y1,n.y+n.h)});
+  const w=Math.max(1600,x1+SVG_PAD);
+  const h=Math.max(1200,y1+SVG_PAD);
+  svg.setAttribute('width',w); svg.setAttribute('height',h);
+  canvasZoom.style.minWidth =w+'px';
+  canvasZoom.style.minHeight=h+'px';
+}
+let zoom=1;
+const ZOOM_MIN=0.08, ZOOM_MAX=5, ZOOM_STEP=0.1;
+const zoomBadge=document.getElementById('zoom-badge');
+
+function applyZoom(z){
+  zoom=Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, parseFloat(z.toFixed(2))));
+  canvasZoom.style.transform=`scale(${zoom})`;
+  const w=+svg.getAttribute('width')||1600;
+  const h=+svg.getAttribute('height')||1200;
+  canvasZoom.style.width =(w*zoom)+'px';
+  canvasZoom.style.height=(h*zoom)+'px';
+  zoomBadge.textContent=Math.round(zoom*100)+'%';
+}
+document.getElementById('btn-zoom-in') .addEventListener('click',()=>applyZoom(zoom+ZOOM_STEP));
+document.getElementById('btn-zoom-out').addEventListener('click',()=>applyZoom(zoom-ZOOM_STEP));
+document.getElementById('btn-zoom-100').addEventListener('click',()=>applyZoom(1));
+document.getElementById('btn-zoom-fit').addEventListener('click',()=>{
+  if(!state.nodes.length)return;
+  let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+  state.nodes.forEach(n=>{x0=Math.min(x0,n.x);y0=Math.min(y0,n.y);x1=Math.max(x1,n.x+n.w);y1=Math.max(y1,n.y+n.h)});
+  const pad=40;
+  const vw=canvasOuter.clientWidth, vh=canvasOuter.clientHeight;
+  const z=Math.min((vw-pad*2)/(x1-x0+pad*2),(vh-pad*2)/(y1-y0+pad*2));
+  applyZoom(z);
+  canvasOuter.scrollLeft=(x0-pad)*z;
+  canvasOuter.scrollTop=(y0-pad)*z;
+});
+canvasOuter.addEventListener('wheel',e=>{
+  if(!e.ctrlKey&&!e.metaKey)return;
+  e.preventDefault();
+  applyZoom(zoom+(e.deltaY<0?ZOOM_STEP:-ZOOM_STEP));
+},{passive:false});
+applyZoom(1);
+
+// ─────────────────────────────────────────────────────
+//  Shape definitions
+// ─────────────────────────────────────────────────────
+const SHAPES={
+  terminal:    {label:'Terminal',      w:120,h:50, path:(w,h)=>{const r=h/2;return`M${r} 0H${w-r}A${r} ${r} 0 0 1 ${w-r} ${h}H${r}A${r} ${r} 0 0 1 ${r} 0Z`}},
+  process:     {label:'Process',       w:130,h:60, path:(w,h)=>`M0 0H${w}V${h}H0Z`},
+  decision:    {label:'Decision',      w:150,h:90, path:(w,h)=>`M${w/2} 0L${w} ${h/2}L${w/2} ${h}L0 ${h/2}Z`},
+  inputoutput: {label:'Input/Output',  w:140,h:60, path:(w,h)=>{const s=Math.min(22,h*.35);return`M${s} 0H${w}L${w-s} ${h}H0Z`}},
+  annotation:  {label:'Annotation',   w:140,h:60, openShape:true, path:(w,h)=>{const t=10;return`M${t} 0H${w}M${t} ${h}H${w}M${t} 0V${h}M0 ${h/2}L${t} 0M0 ${h/2}L${t} ${h}`}},
+  predefined:  {label:'Sub-process',  w:140,h:60, path:(w,h)=>{const i=8;return`M0 0H${w}V${h}H0ZM${i} 0V${h}M${w-i} 0V${h}`}},
+  onpage:      {label:'On-page conn.',w:48,h:48,  path:(w,h)=>{const r=Math.min(w,h)/2;return`M${w/2-r} ${h/2}a${r} ${r} 0 1 0 ${2*r} 0a${r} ${r} 0 1 0 ${-2*r} 0`}},
+  offpage:     {label:'Off-page conn.',w:110,h:70, path:(w,h)=>{const p=h*.3;return`M0 0H${w}V${h-p}L${w/2} ${h}L0 ${h-p}Z`}},
+  database:    {label:'Database',     w:110,h:80, path:(w,h)=>{const ry=h*.12;return`M0 ${ry}a${w/2} ${ry} 0 1 0 ${w} 0a${w/2} ${ry} 0 1 0 ${-w} 0M0 ${ry}V${h-ry}a${w/2} ${ry} 0 0 0 ${w} 0V${ry}M0 ${h-ry}a${w/2} ${ry} 0 0 0 ${w} 0`}},
+  document:    {label:'Document',     w:130,h:70, path:(w,h)=>{const v=h*.18;return`M0 0H${w}V${h-v}C${w*.75} ${h},${w*.6} ${h-2*v},${w*.5} ${h-v}C${w*.4} ${h},${w*.25} ${h-2*v},0 ${h-v}Z`}},
+  multidoc:    {label:'Multi-doc',    w:140,h:80, path:(w,h)=>{const v=h*.14,ox=8,oy=8,dw=w-2*ox,dh=h-2*oy;const d=(x,y)=>`M${x} ${y}H${x+dw}V${y+dh-v}C${x+dw*.75} ${y+dh},${x+dw*.6} ${y+dh-2*v},${x+dw*.5} ${y+dh-v}C${x+dw*.4} ${y+dh},${x+dw*.25} ${y+dh-2*v},${x} ${y+dh-v}Z`;return d(2*ox,2*oy)+' '+d(ox,oy)+' '+d(0,0)}},
+  manualop:    {label:'Manual op.',   w:130,h:60, path:(w,h)=>{const i=16;return`M0 0H${w}L${w-i} ${h}H${i}Z`}},
+  manualinput: {label:'Manual input', w:130,h:60, path:(w,h)=>{const s=h*.4;return`M0 ${s}L${w} 0V${h}H0Z`}},
+  preparation: {label:'Preparation', w:140,h:60, path:(w,h)=>{const e=h*.5;return`M${e} 0H${w-e}L${w} ${h/2}L${w-e} ${h}H${e}L0 ${h/2}Z`}}
+};
+const BASIC=['terminal','process','decision','inputoutput','annotation','predefined','onpage','offpage'];
+const OTHER=['database','document','multidoc','manualop','manualinput','preparation'];
+const DEFAULT_TEXT={
+  terminal:'Start',process:'Process step',decision:'Condition?',
+  inputoutput:'Input / Output',annotation:'Note',predefined:'Sub-process',
+  onpage:'A',offpage:'Page 2',database:'Database',document:'Document',
+  multidoc:'Documents',manualop:'Manual op',manualinput:'Manual input',preparation:'Initialize'
+};
+
+// ─────────────────────────────────────────────────────
+//  Application state
+// ─────────────────────────────────────────────────────
+const state={
+  nodes:[], edges:[], selected:null,
+  tool:'select', connectFrom:null, nextId:1,
+  gFont:'Calibri,Arial,sans-serif', gSize:12,
+  gBold:false, gItalic:false, gUnder:false, gMargin:14
+};
+// Fix #5: separate ID generators for nodes and edges to avoid prefix collision on import
+const uid =()=>`n${state.nextId++}`;
+const euid=()=>`e${state.nextId++}`;
+
+// ─────────────────────────────────────────────────────
+//  Undo / Redo history
+// ─────────────────────────────────────────────────────
+const history={stack:[], cursor:-1, maxSize:50};
+
+function saveSnapshot(){
+  history.stack=history.stack.slice(0,history.cursor+1);
+  history.stack.push(JSON.stringify({nodes:state.nodes,edges:state.edges,nextId:state.nextId}));
+  if(history.stack.length>history.maxSize) history.stack.shift();
+  history.cursor=history.stack.length-1;
+  updateUndoRedo();
+}
+
+function restoreSnapshot(snap){
+  const d=JSON.parse(snap);
+  state.nodes=d.nodes; state.edges=d.edges; state.nextId=d.nextId;
+  state.selected=null; render(); syncInspector();
+}
+
+function undo(){
+  if(history.cursor<=0)return;
+  history.cursor--;
+  restoreSnapshot(history.stack[history.cursor]);
+  updateUndoRedo();
+}
+
+function redo(){
+  if(history.cursor>=history.stack.length-1)return;
+  history.cursor++;
+  restoreSnapshot(history.stack[history.cursor]);
+  updateUndoRedo();
+}
+
+function updateUndoRedo(){
+  const btnUndo=document.getElementById('btn-undo');
+  const btnRedo=document.getElementById('btn-redo');
+  if(btnUndo){btnUndo.disabled=history.cursor<=0;btnUndo.style.opacity=history.cursor<=0?'0.35':'1';}
+  if(btnRedo){btnRedo.disabled=history.cursor>=history.stack.length-1;btnRedo.style.opacity=history.cursor>=history.stack.length-1?'0.35':'1';}
+}
+
+// ─────────────────────────────────────────────────────
+//  Text measurement (canvas API)
+// ─────────────────────────────────────────────────────
+const _mc=document.createElement('canvas').getContext('2d');
+function measureText(text,font,size,bold,italic){
+  _mc.font=`${bold?'bold ':''} ${italic?'italic ':''}${size}px ${font}`;
+  return (text||'').split('\n').reduce((mx,l)=>Math.max(mx,_mc.measureText(l).width),0);
+}
+
+function autoSize(n){
+  const def=SHAPES[n.type];
+  const font=n.font||state.gFont;
+  const size=n.size||state.gSize;
+  const margin=n.margin!=null?n.margin:state.gMargin;
+  const bold=n.bold||false, italic=n.italic||false;
+  const lines=(n.text||'').split('\n');
+  const lh=size*1.45;
+  const textW=measureText(n.text,font,size,bold,italic);
+  const textH=lines.length*lh;
+  const reqW=textW+margin*2;
+  const reqH=textH+margin*2;
+
+  if(n.type==='decision'){
+    n.w=Math.max(def.w, reqW*1.6);
+    n.h=Math.max(def.h, reqH*1.6);
+  } else if(n.type==='onpage'){
+    const d=Math.max(def.w, Math.max(reqW,reqH)+margin);
+    n.w=n.h=d;
+  } else {
+    n.w=Math.max(def.w, reqW);
+    n.h=Math.max(def.h, reqH);
+  }
+  n.w=Math.round(n.w); n.h=Math.round(n.h);
+}
+
+// ─────────────────────────────────────────────────────
+//  Palette builder
+// ─────────────────────────────────────────────────────
+let pendingType=null;
+function buildPalItem(type){
+  const s=SHAPES[type], el=document.createElement('div');
+  el.className='pal-item'; el.dataset.type=type; el.draggable=true;
+  el.innerHTML=`<svg viewBox="-2 -2 ${s.w+4} ${s.h+4}">
+    <path d="${s.path(s.w,s.h)}" fill="${s.openShape?'none':'#fff'}" stroke="#374151" stroke-width="1.5" stroke-linejoin="round"/>
+  </svg><div class="pal-lbl">${s.label}</div>`;
+  el.addEventListener('dragstart',e=>{e.dataTransfer.setData('text/plain',type);e.dataTransfer.effectAllowed='copy'});
+  el.addEventListener('click',()=>{
+    pendingType=type;
+    canvasOuter.classList.add('placing');
+  });
+  return el;
+}
+const pb=document.getElementById('pal-basic'), po=document.getElementById('pal-other');
+BASIC.forEach(t=>pb.appendChild(buildPalItem(t)));
+OTHER.forEach(t=>po.appendChild(buildPalItem(t)));
+
+// ─────────────────────────────────────────────────────
+//  Coordinate conversion
+// ─────────────────────────────────────────────────────
+function svgPt(clientX,clientY){
+  const r=svg.getBoundingClientRect();
+  return{x:(clientX-r.left)/zoom, y:(clientY-r.top)/zoom};
+}
+
+// ─────────────────────────────────────────────────────
+//  Add / manage nodes
+// ─────────────────────────────────────────────────────
+function addNode(type,cx,cy){
+  const def=SHAPES[type];
+  const n={
+    id:uid(), type,
+    x:Math.round(cx-def.w/2), y:Math.round(cy-def.h/2),
+    w:def.w, h:def.h,
+    text:DEFAULT_TEXT[type]||'',
+    font:state.gFont, size:state.gSize,
+    bold:state.gBold, italic:state.gItalic, under:state.gUnder,
+    margin:state.gMargin
+  };
+  autoSize(n);
+  state.nodes.push(n);
+  saveSnapshot();
+  render();
+  selectItem('node',n.id);
+}
+
+function deleteSelected(){
+  if(!state.selected)return;
+  if(state.selected.kind==='node'){
+    const id=state.selected.id;
+    state.nodes=state.nodes.filter(n=>n.id!==id);
+    state.edges=state.edges.filter(e=>e.from!==id&&e.to!==id);
+  } else {
+    state.edges=state.edges.filter(e=>e.id!==state.selected.id);
+  }
+  saveSnapshot();
+  state.selected=null; render(); syncInspector();
+}
+
+// ─────────────────────────────────────────────────────
+//  Edge intersection — precise shape border hit
+// ─────────────────────────────────────────────────────
+// Returns the point where the line from 'center' toward 'target'
+// intersects the actual rendered border of the given node.
+function shapeIntersect(node, center, target){
+  const def=SHAPES[node.type];
+  const dx=target.x-center.x, dy=target.y-center.y;
+  if(!dx&&!dy) return center;
+
+  const w=node.w, h=node.h;
+  const t=node.type;
+
+  // ── Decision (diamond): 4 edges ─────────────────────
+  if(t==='decision'){
+    // Diamond vertices (in node-local coords, then shift by node.x,node.y)
+    const pts=[
+      {x:node.x+w/2, y:node.y},        // top
+      {x:node.x+w,   y:node.y+h/2},    // right
+      {x:node.x+w/2, y:node.y+h},      // bottom
+      {x:node.x,     y:node.y+h/2}     // left
+    ];
+    const edges4=[
+      [pts[0],pts[1]],[pts[1],pts[2]],
+      [pts[2],pts[3]],[pts[3],pts[0]]
+    ];
+    let best=null, bestT=Infinity;
+    for(const [a,b] of edges4){
+      const p=lineSegIntersect(center,target,a,b);
+      if(p!==null){
+        const tt=Math.abs(dx)>Math.abs(dy)?(p.x-center.x)/dx:(p.y-center.y)/dy;
+        if(tt>=0&&tt<bestT){bestT=tt;best=p;}
+      }
+    }
+    return best||center;
+  }
+
+  // ── Terminal (rounded rect): treat as rectangle for connector math ──
+  if(t==='terminal'){
+    return boxIntersect(node,center,target);
+  }
+
+  // ── On-page connector (circle) ───────────────────────
+  if(t==='onpage'){
+    const r=Math.min(w,h)/2;
+    const cx2=node.x+w/2, cy2=node.y+h/2;
+    const len=Math.sqrt(dx*dx+dy*dy);
+    return {x:cx2+dx/len*r, y:cy2+dy/len*r};
+  }
+
+  // ── All other shapes: bounding box ──────────────────
+  return boxIntersect(node,center,target);
+}
+
+// Line-segment intersection helper (returns intersection point or null)
+function lineSegIntersect(p1,p2,p3,p4){
+  const d1x=p2.x-p1.x, d1y=p2.y-p1.y;
+  const d2x=p4.x-p3.x, d2y=p4.y-p3.y;
+  const denom=d1x*d2y-d1y*d2x;
+  if(Math.abs(denom)<1e-10) return null;
+  const t=((p3.x-p1.x)*d2y-(p3.y-p1.y)*d2x)/denom;
+  const u=((p3.x-p1.x)*d1y-(p3.y-p1.y)*d1x)/denom;
+  if(t>=0&&u>=0&&u<=1){
+    return {x:p1.x+t*d1x, y:p1.y+t*d1y};
+  }
+  return null;
+}
+
+// ─────────────────────────────────────────────────────
+//  Rendering
+//  Fix #2: coalesce rapid back-to-back render() calls into a single
+//  animation frame so the browser never does redundant DOM work.
+// ─────────────────────────────────────────────────────
+let _rafRenderPending=false;
+function render(){
+  if(_rafRenderPending)return; // already queued — skip duplicate
+  _rafRenderPending=true;
+  requestAnimationFrame(_doRender);
+}
+function _doRender(){
+  _rafRenderPending=false;
+  // Edges
+  edgesL.innerHTML='';
+  state.edges.forEach(edge=>{
+    const a=state.nodes.find(n=>n.id===edge.from);
+    const b=state.nodes.find(n=>n.id===edge.to);
+    if(!a||!b)return;
+    const[p1,p2]=edgePts(a,b);
+    const sel=state.selected?.kind==='edge'&&state.selected.id===edge.id;
+    const isAnno=a.type==='annotation'||b.type==='annotation';
+
+    const hit=mkEl('line',{class:'edge-hit',x1:p1.x,y1:p1.y,x2:p2.x,y2:p2.y});
+    hit.addEventListener('click',ev=>{ev.stopPropagation();selectItem('edge',edge.id)});
+    edgesL.appendChild(hit);
+
+    const ln=mkEl('line',{class:'edge-line'+(sel?' selected':'')+(isAnno?' annotation':''),
+      x1:p1.x,y1:p1.y,x2:p2.x,y2:p2.y});
+    if(!isAnno) ln.setAttribute('marker-end',sel?'url(#ahs)':'url(#ah)');
+    edgesL.appendChild(ln);
+
+    if(edge.label){
+      const t=mkEl('text',{class:'edge-label',x:(p1.x+p2.x)/2,y:(p1.y+p2.y)/2-5});
+      t.textContent=edge.label; edgesL.appendChild(t);
+    }
+  });
+
+  // Nodes
+  nodesL.innerHTML='';
+  state.nodes.forEach(node=>{
+    const def=SHAPES[node.type];
+    const sel=state.selected?.kind==='node'&&state.selected.id===node.id;
+    const g=mkEl('g',{class:'node-group'+(sel?' selected':''),transform:`translate(${node.x} ${node.y})`});
+    g.dataset.id=node.id;
+
+    const path=mkEl('path',{class:'node-shape', d:def.path(node.w,node.h)});
+    if(def.openShape) path.setAttribute('fill','none');
+    g.appendChild(path);
+
+    const font=node.font||'Calibri,Arial,sans-serif';
+    const size=node.size||12;
+    const lh=size*1.45;
+    const lines=(node.text||'').split('\n');
+    const totalH=lines.length*lh;
+
+    lines.forEach((line,i)=>{
+      const t=mkEl('text',{
+        x:node.w/2,
+        y:node.h/2 - totalH/2 + lh*0.5 + i*lh,
+        'text-anchor':'middle',
+        'dominant-baseline':'middle',
+        'pointer-events':'none',
+        'font-family':font,
+        'font-size':size,
+        fill:'#1a1f2e'
+      });
+      if(node.italic)t.setAttribute('font-style','italic');
+      if(node.under) t.setAttribute('text-decoration','underline');
+      const hasBoldMarker=/\*\*/.test(line);
+      if(!hasBoldMarker){
+        if(node.bold) t.setAttribute('font-weight','bold');
+        t.textContent=line;
+      } else {
+        const parts=line.split(/(\*\*[^*]+\*\*)/g);
+        let hasContent=false;
+        parts.forEach(part=>{
+          const isBold=/^\*\*(.+)\*\*$/.test(part);
+          const span=mkEl('tspan',{});
+          if(isBold||node.bold) span.setAttribute('font-weight','bold');
+          else span.setAttribute('font-weight','normal');
+          span.textContent=isBold?part.slice(2,-2):part;
+          t.appendChild(span);
+          if(part) hasContent=true;
+        });
+        if(!hasContent) t.textContent='';
+      }
+      g.appendChild(t);
+    });
+
+    g.addEventListener('mousedown',onNodeDown);
+    g.addEventListener('click',ev=>{
+      ev.stopPropagation();
+      state.tool==='connect'?doConnect(node.id):selectItem('node',node.id);
+    });
+    g.addEventListener('dblclick',ev=>{ev.stopPropagation();startEdit(node)});
+    nodesL.appendChild(g);
+  });
+  // Fix #6: resize SVG canvas to content after each render, then refresh zoom sizing
+  resizeSVGToContent();
+  applyZoom(zoom);
+}
+
+// ─────────────────────────────────────────────────────
+//  Edge math — use precise shape border intersection
+// ─────────────────────────────────────────────────────
+function edgePts(a,b){
+  const ac={x:a.x+a.w/2, y:a.y+a.h/2};
+  const bc={x:b.x+b.w/2, y:b.y+b.h/2};
+  const p1=shapeIntersect(a, ac, bc);
+  const p2=shapeIntersect(b, bc, ac);
+  return [p1, p2];
+}
+
+function boxIntersect(n,c,t){
+  const dx=t.x-c.x, dy=t.y-c.y;
+  if(!dx&&!dy)return c;
+  const sx=dx?n.w/2/Math.abs(dx):Infinity;
+  const sy=dy?n.h/2/Math.abs(dy):Infinity;
+  const s=Math.min(sx,sy);
+  return{x:c.x+dx*s, y:c.y+dy*s};
+}
+
+// ─────────────────────────────────────────────────────
+//  SVG element helper
+// ─────────────────────────────────────────────────────
+function mkEl(tag,attrs={}){
+  const el=document.createElementNS(NS,tag);
+  Object.entries(attrs).forEach(([k,v])=>el.setAttribute(k,v));
+  return el;
+}
+
+// ─────────────────────────────────────────────────────
+//  Drag to move
+// ─────────────────────────────────────────────────────
+let drag=null;
+// Fix #1 & #2: guard flag so render() is only called once per animation frame during drag
+let _rafDragPending=false;
+function onNodeDown(ev){
+  if(state.tool!=='select')return;
+  const id=ev.currentTarget.dataset.id;
+  const n=state.nodes.find(x=>x.id===id); if(!n)return;
+  selectItem('node',id);
+  const p=svgPt(ev.clientX,ev.clientY);
+  drag={id,ox:p.x-n.x,oy:p.y-n.y};
+  ev.preventDefault();
+}
+window.addEventListener('mousemove',ev=>{
+  if(!drag)return;
+  const n=state.nodes.find(x=>x.id===drag.id); if(!n)return;
+  const p=svgPt(ev.clientX,ev.clientY);
+  n.x=Math.round(p.x-drag.ox); n.y=Math.round(p.y-drag.oy);
+  // Throttle: only re-render once per animation frame, not on every pixel
+  if(!_rafDragPending){
+    _rafDragPending=true;
+    requestAnimationFrame(()=>{
+      render();
+      syncXYFields();
+      _rafDragPending=false;
+    });
+  }
+});
+window.addEventListener('mouseup',()=>{if(drag){saveSnapshot();}drag=null;_rafDragPending=false;});
+
+// ─────────────────────────────────────────────────────
+//  Connect tool
+// ─────────────────────────────────────────────────────
+function doConnect(id){
+  if(!state.connectFrom){
+    state.connectFrom=id;
+  } else if(state.connectFrom===id){
+    state.connectFrom=null;
+  } else {
+    if(!state.edges.some(e=>e.from===state.connectFrom&&e.to===id)){
+      state.edges.push({id:euid(),from:state.connectFrom,to:id,label:''});
+      saveSnapshot();
+    }
+    state.connectFrom=null; render();
+  }
+}
+
+// ─────────────────────────────────────────────────────
+//  Select
+// ─────────────────────────────────────────────────────
+function selectItem(kind,id){
+  state.selected={kind,id};
+  if(kind==='node') ensureInspectorOpen();
+  render(); syncInspector();
+}
+svg.addEventListener('click',ev=>{
+  if(ev.target===svg||ev.target===canvasOuter){
+    state.selected=null; state.connectFrom=null; render(); syncInspector();
+  }
+});
+
+// ─────────────────────────────────────────────────────
+//  Inline text editor
+// ─────────────────────────────────────────────────────
+function startEdit(node){
+  selectItem('node',node.id);
+  const r=svg.getBoundingClientRect();
+  const ta=document.createElement('textarea');
+  ta.className='edit-overlay';
+  ta.value=node.text||'';
+  ta.style.left =(r.left+node.x*zoom+6)+'px';
+  ta.style.top  =(r.top +node.y*zoom+6)+'px';
+  ta.style.width =(node.w*zoom-12)+'px';
+  ta.style.height=(node.h*zoom-12)+'px';
+  ta.style.font  =`${node.bold?'bold ':''} ${node.italic?'italic ':''}${(node.size||12)*zoom}px ${node.font||'Calibri,Arial,sans-serif'}`;
+  if(node.under) ta.style.textDecoration='underline';
+  document.body.appendChild(ta); ta.focus(); ta.select();
+  const done=()=>{
+    node.text=ta.value;
+    autoSize(node); ta.remove(); render(); syncInspector();
+  };
+  ta.addEventListener('blur',done);
+  ta.addEventListener('keydown',e=>{
+    if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();ta.blur();}
+    else if(e.key==='Escape'){ta.value=node.text||'';ta.blur();}
+  });
+}
+
+// ─────────────────────────────────────────────────────
+//  Inspector synchronisation
+// ─────────────────────────────────────────────────────
+const $ =id=>document.getElementById(id);
+const inspEmpty   =$('insp-empty');
+const inspContent =$('insp-content');
+const inspText    =$('insp-text');
+const inspX=$('insp-x'),inspY=$('insp-y'),inspW=$('insp-w'),inspH=$('insp-h');
+const inspTitle   =$('insp-title');
+const edgeSec     =$('edge-section');
+const inspEdgeLbl =$('insp-edge-lbl');
+const inspFF      =$('insp-ff'),    inspFS    =$('insp-fs');
+const inspBold    =$('insp-bold'),  inspItalic=$('insp-italic'),inspUnder=$('insp-under');
+const inspMg      =$('insp-mg'),    inspMgLbl =$('insp-mg-lbl');
+
+function syncInspector(){
+  if(!state.selected){
+    inspEmpty.style.display=''; inspContent.style.display='none'; return;
+  }
+  inspEmpty.style.display='none'; inspContent.style.display='';
+  if(state.selected.kind==='node'){
+    const n=state.nodes.find(x=>x.id===state.selected.id); if(!n)return;
+    inspTitle.textContent=SHAPES[n.type].label+' Properties';
+    inspText.value=n.text||''; inspText.disabled=false;
+    inspX.value=n.x; inspY.value=n.y; inspW.value=n.w; inspH.value=n.h;
+    [inspX,inspY,inspW,inspH].forEach(el=>el.disabled=false);
+    edgeSec.style.display='none';
+    inspFF.value=n.font||'Calibri,Arial,sans-serif';
+    inspFS.value=n.size||12;
+    inspBold.classList.toggle('on',  n.bold||false);
+    inspItalic.classList.toggle('on',n.italic||false);
+    inspUnder.classList.toggle('on', n.under||false);
+    const mg=n.margin??14; inspMg.value=mg; inspMgLbl.textContent=mg+'px';
+    mirrorToToolbar(n);
+  } else {
+    const e=state.edges.find(x=>x.id===state.selected.id); if(!e)return;
+    inspTitle.textContent='Flowline Properties';
+    inspText.value=''; inspText.disabled=true;
+    [inspX,inspY,inspW,inspH].forEach(el=>{el.value='';el.disabled=true});
+    edgeSec.style.display='';
+    inspEdgeLbl.value=e.label||'';
+  }
+}
+
+function syncXYFields(){
+  if(!state.selected||state.selected.kind!=='node')return;
+  const n=state.nodes.find(x=>x.id===state.selected.id); if(!n)return;
+  inspX.value=n.x; inspY.value=n.y; inspW.value=n.w; inspH.value=n.h;
+}
+
+function mirrorToToolbar(n){
+  $('tb-font-family').value=n.font||'Calibri,Arial,sans-serif';
+  $('tb-font-size').value  =n.size||12;
+  $('tb-bold')  .classList.toggle('on',n.bold||false);
+  $('tb-italic').classList.toggle('on',n.italic||false);
+  $('tb-under') .classList.toggle('on',n.under||false);
+  $('margin-range').value=n.margin??14;
+  $('margin-lbl').textContent=n.margin??14;
+}
+
+// ─────────────────────────────────────────────────────
+//  Apply font changes to selected node
+// ─────────────────────────────────────────────────────
+function applyFont(src){
+  if(!state.selected||state.selected.kind!=='node')return;
+  const n=state.nodes.find(x=>x.id===state.selected.id); if(!n)return;
+
+  if(src==='toolbar'){
+    n.font  =$('tb-font-family').value;
+    n.size  =parseInt($('tb-font-size').value);
+    n.bold  =$('tb-bold').classList.contains('on');
+    n.italic=$('tb-italic').classList.contains('on');
+    n.under =$('tb-under').classList.contains('on');
+    n.margin=parseInt($('margin-range').value);
+  } else {
+    n.font  =inspFF.value;
+    n.size  =parseInt(inspFS.value);
+    n.bold  =inspBold.classList.contains('on');
+    n.italic=inspItalic.classList.contains('on');
+    n.under =inspUnder.classList.contains('on');
+    n.margin=parseInt(inspMg.value);
+  }
+  autoSize(n);
+  inspW.value=n.w; inspH.value=n.h;
+  state.gFont=n.font; state.gSize=n.size;
+  state.gBold=n.bold; state.gItalic=n.italic;
+  state.gUnder=n.under; state.gMargin=n.margin;
+  render();
+  if(src==='toolbar') syncInspector(); else mirrorToToolbar(n);
+}
+
+// ─────────────────────────────────────────────────────
+//  Bold selected text in label textarea
+// ─────────────────────────────────────────────────────
+function applyBoldToSelection(){
+  if(!state.selected||state.selected.kind!=='node') return;
+  const n=state.nodes.find(x=>x.id===state.selected.id); if(!n) return;
+  const ta=inspText;
+  const start=ta.selectionStart, end=ta.selectionEnd;
+  const text=ta.value;
+  if(start===end){
+    $('tb-bold').classList.toggle('on');
+    inspBold.classList.toggle('on');
+    applyFont('toolbar');
+    return;
+  }
+  const selected=text.slice(start,end);
+  if(selected.startsWith('**')&&selected.endsWith('**')&&selected.length>4){
+    ta.value=text.slice(0,start)+selected.slice(2,-2)+text.slice(end);
+  } else {
+    ta.value=text.slice(0,start)+'**'+selected+'**'+text.slice(end);
+  }
+  n.text=ta.value;
+  autoSize(n);
+  inspW.value=n.w; inspH.value=n.h;
+  render();
+}
+
+// Toolbar font controls
+$('tb-font-family').addEventListener('change',()=>applyFont('toolbar'));
+$('tb-font-size')  .addEventListener('change',()=>applyFont('toolbar'));
+$('tb-bold')  .addEventListener('click',()=>{ applyBoldToSelection(); });
+$('tb-italic').addEventListener('click',()=>{$('tb-italic').classList.toggle('on');applyFont('toolbar')});
+$('tb-under') .addEventListener('click',()=>{$('tb-under').classList.toggle('on'); applyFont('toolbar')});
+$('margin-range').addEventListener('input',()=>{
+  $('margin-lbl').textContent=$('margin-range').value;
+  applyFont('toolbar');
+});
+
+// Inspector font controls
+inspFF.addEventListener('change',()=>applyFont('inspector'));
+inspFS.addEventListener('change',()=>applyFont('inspector'));
+inspBold  .addEventListener('click',()=>{ applyBoldToSelection(); });
+inspItalic.addEventListener('click',()=>{inspItalic.classList.toggle('on');applyFont('inspector')});
+inspUnder .addEventListener('click',()=>{inspUnder.classList.toggle('on'); applyFont('inspector')});
+inspMg.addEventListener('input',()=>{inspMgLbl.textContent=inspMg.value+'px'; applyFont('inspector')});
+
+// Inspector geometry / text
+// Fix #4: debounce render on rapid keystrokes — only re-render 80ms after typing stops
+let _inspTextTimer=null;
+inspText.addEventListener('input',()=>{
+  if(!state.selected||state.selected.kind!=='node')return;
+  const n=state.nodes.find(x=>x.id===state.selected.id); if(!n)return;
+  n.text=inspText.value; autoSize(n);
+  inspW.value=n.w; inspH.value=n.h;
+  clearTimeout(_inspTextTimer);
+  _inspTextTimer=setTimeout(()=>render(), 80);
+});
+inspText.addEventListener('change',()=>{ clearTimeout(_inspTextTimer); render(); saveSnapshot(); });
+let _inspGeomTimer=null;
+[inspX,inspY,inspW,inspH].forEach(el=>el.addEventListener('input',()=>{
+  if(!state.selected||state.selected.kind!=='node')return;
+  const n=state.nodes.find(x=>x.id===state.selected.id); if(!n)return;
+  n.x=parseInt(inspX.value)||0; n.y=parseInt(inspY.value)||0;
+  n.w=Math.max(40,parseInt(inspW.value)||40);
+  n.h=Math.max(30,parseInt(inspH.value)||30);
+  clearTimeout(_inspGeomTimer);
+  _inspGeomTimer=setTimeout(()=>render(), 80);
+}));
+let _inspEdgeTimer=null;
+inspEdgeLbl.addEventListener('input',()=>{
+  if(!state.selected||state.selected.kind!=='edge')return;
+  const e=state.edges.find(x=>x.id===state.selected.id); if(!e)return;
+  e.label=inspEdgeLbl.value;
+  clearTimeout(_inspEdgeTimer);
+  _inspEdgeTimer=setTimeout(()=>render(), 80);
+});
+
+// ─────────────────────────────────────────────────────
+//  Toolbar tool buttons
+// ─────────────────────────────────────────────────────
+function setTool(t){
+  state.tool=t; state.connectFrom=null;
+  $('tool-select') .classList.toggle('active',t==='select');
+  $('tool-connect').classList.toggle('active',t==='connect');
+  canvasOuter.classList.toggle('connect-mode',t==='connect');
+  render();
+}
+$('tool-select') .addEventListener('click',()=>setTool('select'));
+$('tool-connect').addEventListener('click',()=>setTool('connect'));
+$('btn-delete')  .addEventListener('click',deleteSelected);
+$('btn-undo')    .addEventListener('click',undo);
+$('btn-redo')    .addEventListener('click',redo);
+$('btn-clear')   .addEventListener('click',()=>{
+  if(!state.nodes.length&&!state.edges.length)return;
+  if(confirm('Clear the entire flowchart?')){
+    saveSnapshot();
+    state.nodes=[];state.edges=[];state.selected=null;render();syncInspector();
+  }
+});
+
+// ─────────────────────────────────────────────────────
+//  Drop / click-to-place
+// ─────────────────────────────────────────────────────
+canvasOuter.addEventListener('dragover',e=>{e.preventDefault();e.dataTransfer.dropEffect='copy'});
+canvasOuter.addEventListener('drop',e=>{
+  e.preventDefault();
+  const t=e.dataTransfer.getData('text/plain');
+  if(!SHAPES[t])return;
+  const p=svgPt(e.clientX,e.clientY); addNode(t,p.x,p.y);
+});
+canvasOuter.addEventListener('click',e=>{
+  if(!pendingType)return;
+  const p=svgPt(e.clientX,e.clientY);
+  addNode(pendingType,p.x,p.y);
+  pendingType=null; canvasOuter.classList.remove('placing');
+});
+
+// ─────────────────────────────────────────────────────
+//  Keyboard shortcuts
+// ─────────────────────────────────────────────────────
+window.addEventListener('keydown',e=>{
+  const active=document.activeElement?.tagName;
+  const inField=active==='INPUT'||active==='TEXTAREA'||active==='SELECT';
+  if(e.ctrlKey||e.metaKey){
+    if(e.key==='+'||e.key==='='){e.preventDefault();applyZoom(zoom+ZOOM_STEP);}
+    else if(e.key==='-'){e.preventDefault();applyZoom(zoom-ZOOM_STEP);}
+    else if(e.key==='0'){e.preventDefault();applyZoom(1);}
+    else if(e.key==='z'||e.key==='Z'){e.preventDefault();undo();}
+    else if(e.key==='y'||e.key==='Y'){e.preventDefault();redo();}
+    else if(!inField){
+      if(e.key==='b'||e.key==='B'){e.preventDefault();$('tb-bold').classList.toggle('on'); applyFont('toolbar');}
+      else if(e.key==='i'||e.key==='I'){e.preventDefault();$('tb-italic').classList.toggle('on');applyFont('toolbar');}
+      else if(e.key==='u'||e.key==='U'){e.preventDefault();$('tb-under').classList.toggle('on'); applyFont('toolbar');}
+    }
+    return;
+  }
+  if(inField)return;
+  if(e.key==='v'||e.key==='V')setTool('select');
+  else if(e.key==='c'||e.key==='C')setTool('connect');
+  else if(e.key==='Delete'||e.key==='Backspace')deleteSelected();
+  else if(e.key==='Escape'){
+    pendingType=null; canvasOuter.classList.remove('placing');
+    state.connectFrom=null; state.selected=null; render(); syncInspector();
+  }
+});
+
+// ─────────────────────────────────────────────────────
+//  Export helpers
+// ─────────────────────────────────────────────────────
+function standaloneSVG(){
+  if(!state.nodes.length)return null;
+  let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+  state.nodes.forEach(n=>{x0=Math.min(x0,n.x);y0=Math.min(y0,n.y);x1=Math.max(x1,n.x+n.w);y1=Math.max(y1,n.y+n.h)});
+  const p=24,w=x1-x0+2*p,h=y1-y0+2*p;
+  const out=svg.cloneNode(true);
+  out.setAttribute('width',w); out.setAttribute('height',h);
+  out.setAttribute('viewBox',`${x0-p} ${y0-p} ${w} ${h}`);
+  out.querySelectorAll('.selected').forEach(el=>el.classList.remove('selected'));
+  out.querySelectorAll('.edge-hit').forEach(el=>el.remove());
+  return out;
+}
+$('btn-export-svg').addEventListener('click',()=>{
+  const o=standaloneSVG(); if(!o){alert('Add a shape first.');return;}
+  dl('flowchart.svg',new Blob(['<?xml version="1.0" encoding="UTF-8"?>\n'+new XMLSerializer().serializeToString(o)],{type:'image/svg+xml'}));
+});
+$('btn-export-png').addEventListener('click',()=>{
+  const o=standaloneSVG(); if(!o){alert('Add a shape first.');return;}
+  const xml=new XMLSerializer().serializeToString(o);
+  const w=+o.getAttribute('width'),h=+o.getAttribute('height'),sc=2;
+  const img=new Image();
+  img.onload=()=>{
+    const cv=document.createElement('canvas'); cv.width=w*sc; cv.height=h*sc;
+    const ctx=cv.getContext('2d');
+    ctx.fillStyle='#fff'; ctx.fillRect(0,0,cv.width,cv.height);
+    ctx.scale(sc,sc); ctx.drawImage(img,0,0);
+    cv.toBlob(b=>dl('flowchart.png',b),'image/png');
+  };
+  img.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(xml);
+});
+$('btn-export-json').addEventListener('click',()=>
+  dl('flowchart.json',new Blob([JSON.stringify({nodes:state.nodes,edges:state.edges},null,2)],{type:'application/json'}))
+);
+const impFile=$('import-file');
+$('btn-import-json').addEventListener('click',()=>impFile.click());
+impFile.addEventListener('change',e=>{
+  const f=e.target.files[0]; if(!f)return;
+  const r=new FileReader();
+  r.onload=()=>{
+    try{
+      const d=JSON.parse(r.result);
+      if(!d.nodes||!d.edges)throw new Error();
+      state.nodes=d.nodes; state.edges=d.edges;
+      const ids=[...d.nodes,...d.edges].map(o=>parseInt((o.id||'').replace(/^[a-z]+/i,''))).filter(n=>!isNaN(n));
+      state.nextId=(ids.length?Math.max(...ids):0)+1;
+      state.selected=null; render(); syncInspector(); saveSnapshot();
+    }catch{alert('Invalid flowchart JSON file.');}
+  };
+  r.readAsText(f); impFile.value='';
+});
+function dl(name,blob){
+  const u=URL.createObjectURL(blob),a=document.createElement('a');
+  a.href=u; a.download=name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(u),1500);
+}
+
+// ─────────────────────────────────────────────────────
+//  Load sample chart
+// ─────────────────────────────────────────────────────
+(function sample(){
+  const f='Calibri,Arial,sans-serif', sz=12, mg=14;
+  const mk=(id,type,x,y,text)=>{
+    const n={id,type,x,y,w:SHAPES[type].w,h:SHAPES[type].h,text,font:f,size:sz,bold:false,italic:false,under:false,margin:mg};
+    autoSize(n); return n;
+  };
+  state.nodes=[
+    mk('n1','terminal',   420,50, 'Start'),
+    mk('n2','inputoutput',410,140,'Read input'),
+    mk('n3','process',    415,240,'Validate data'),
+    mk('n4','decision',   410,340,'Valid?'),
+    mk('n5','process',    230,480,'Show error'),
+    mk('n6','predefined', 600,480,'Process record'),
+    mk('n7','database',   615,590,'Records DB'),
+    mk('n8','terminal',   420,720,'End')
+  ];
+  state.edges=[
+    {id:'e1',from:'n1',to:'n2',label:''},{id:'e2',from:'n2',to:'n3',label:''},
+    {id:'e3',from:'n3',to:'n4',label:''},{id:'e4',from:'n4',to:'n5',label:'No'},
+    {id:'e5',from:'n4',to:'n6',label:'Yes'},{id:'e6',from:'n6',to:'n7',label:''},
+    {id:'e7',from:'n5',to:'n8',label:''},{id:'e8',from:'n6',to:'n8',label:''}
+  ];
+  state.nextId=20; render();
+  saveSnapshot();
+})();
+</script>
+</body>
+</html>
