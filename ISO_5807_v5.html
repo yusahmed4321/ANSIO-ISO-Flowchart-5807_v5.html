@@ -209,6 +209,8 @@
     <input type="file" id="import-file" accept=".json" style="display:none">
     <button class="tbtn" id="btn-open-pdf" title="Open a PDF saved by this editor — the flowchart inside is restored for editing">⤒ Open PDF</button>
     <input type="file" id="open-pdf-file" accept=".pdf,application/pdf" style="display:none">
+    <button class="tbtn" id="btn-open-vsdx" title="Import a Microsoft Visio flowchart (.vsdx) — shapes, text and connections are converted for this editor">⤒ Visio</button>
+    <input type="file" id="open-vsdx-file" accept=".vsdx" style="display:none">
     <div class="sep"></div>
     <button class="tbtn" id="btn-zoom-out" title="Zoom Out (Ctrl −)">−</button>
     <span class="zoom-badge" id="zoom-badge">100%</span>
@@ -1461,6 +1463,187 @@ pdfFileInput.addEventListener('change',e=>{
     }
   };
   r.readAsArrayBuffer(f); pdfFileInput.value='';
+});
+
+// ─────────────────────────────────────────────────────
+//  Visio (.vsdx) import — no libraries needed.
+//  A .vsdx is a ZIP of XML: the browser's DecompressionStream
+//  inflates the entries and DOMParser reads the shape data, so the
+//  conversion is deterministic (no OCR, no guessing at pixels).
+// ─────────────────────────────────────────────────────
+async function unzipEntries(buf){
+  const u8=new Uint8Array(buf), dv=new DataView(buf);
+  let eocd=-1;
+  for(let i=u8.length-22;i>=Math.max(0,u8.length-22-65536);i--){
+    if(dv.getUint32(i,true)===0x06054b50){eocd=i;break;}
+  }
+  if(eocd<0)throw new Error('not a zip');
+  const count=dv.getUint16(eocd+10,true);
+  let off=dv.getUint32(eocd+16,true);
+  const entries={};
+  for(let i=0;i<count;i++){
+    if(dv.getUint32(off,true)!==0x02014b50)break;
+    const method=dv.getUint16(off+10,true);
+    const csize=dv.getUint32(off+20,true);
+    const nlen=dv.getUint16(off+28,true), elen=dv.getUint16(off+30,true), clen=dv.getUint16(off+32,true);
+    const lho=dv.getUint32(off+42,true);
+    const name=new TextDecoder().decode(u8.subarray(off+46,off+46+nlen));
+    entries[name]={method,csize,lho};
+    off+=46+nlen+elen+clen;
+  }
+  return {
+    names:Object.keys(entries),
+    async read(name){
+      const f=entries[name]; if(!f)return null;
+      const nl=dv.getUint16(f.lho+26,true), el=dv.getUint16(f.lho+28,true);
+      const data=u8.subarray(f.lho+30+nl+el, f.lho+30+nl+el+f.csize);
+      if(f.method===0)return new TextDecoder().decode(data);
+      const out=await new Response(new Blob([data]).stream()
+        .pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
+      return new TextDecoder().decode(out);
+    }
+  };
+}
+
+const VSDX_MAP={'Process':'process','Rectangle':'process','Square':'process',
+  'Decision':'decision','Diamond':'decision','Octagon':'terminal','Start/End':'terminal',
+  'Terminator':'terminal','Circle':'onpage','Ellipse':'onpage','Note':'annotation',
+  'Document':'document','Data':'inputoutput','Database':'database',
+  'Subprocess':'predefined','Predefined process':'predefined','Preparation':'preparation',
+  'On-page reference':'onpage','Off-page reference':'offpage','Manual input':'manualinput',
+  'Manual operation':'manualop','Stored data':'database'};
+const VSDX_CONNECTOR=new Set(['Dynamic connector','Straight Line','Line','Arc',
+  'Line Double Arrow','Mid-arrow dotted','Single arrowhead','Double arrowhead','Block Single Arrow']);
+const VSDX_SCALE=96; // px per inch
+
+async function vsdxToChart(buf){
+  const zip=await unzipEntries(buf);
+  const parse=s=>new DOMParser().parseFromString(s,'application/xml');
+  const pageName=zip.names.filter(n=>/^visio\/pages\/page\d+\.xml$/.test(n)).sort()[0];
+  if(!pageName)throw new Error('no Visio page found');
+  const pageDoc=parse(await zip.read(pageName));
+  const mastersDoc=parse(await zip.read('visio/masters/masters.xml')||'<x/>');
+  const pagesDoc=parse(await zip.read('visio/pages/pages.xml')||'<x/>');
+
+  const cellOf=(el,n)=>{ // first matching Cell that is a DIRECT child
+    for(const c of el.children) if(c.tagName==='Cell'&&c.getAttribute('N')===n) return c.getAttribute('V');
+    return null;
+  };
+  const numCell=(el,n)=>{const v=cellOf(el,n);return v==null?null:parseFloat(v);};
+
+  let pageH=null;
+  for(const c of pagesDoc.getElementsByTagName('Cell'))
+    if(c.getAttribute('N')==='PageHeight'){pageH=parseFloat(c.getAttribute('V'));break;}
+  if(pageH==null)pageH=11;
+
+  // master id -> name, and default width/height from the master files
+  const mname={}, mrid={};
+  for(const m of mastersDoc.getElementsByTagName('Master')){
+    mname[m.getAttribute('ID')]=m.getAttribute('NameU')||m.getAttribute('Name')||'';
+    const rel=m.getElementsByTagName('Rel')[0];
+    if(rel)mrid[m.getAttribute('ID')]=rel.getAttribute('r:id')||rel.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships','id');
+  }
+  const relsX=await zip.read('visio/masters/_rels/masters.xml.rels');
+  const rid2file={};
+  if(relsX)for(const r of parse(relsX).getElementsByTagName('Relationship'))
+    rid2file[r.getAttribute('Id')]=(r.getAttribute('Target')||'').split('/').pop();
+  const mwh={};
+  for(const [mid,rid] of Object.entries(mrid)){
+    const f=rid2file[rid]; if(!f)continue;
+    const mx=await zip.read('visio/masters/'+f); if(!mx)continue;
+    const md=parse(mx);
+    const sh=md.getElementsByTagName('Shape')[0];
+    if(sh){const w=numCell(sh,'Width'),h=numCell(sh,'Height');if(w!=null&&h!=null)mwh[mid]=[w,h];}
+  }
+
+  const textOf=sh=>{
+    const t=sh.getElementsByTagName('Text')[0];
+    if(!t)return '';
+    return (t.textContent||'').replace(/ /g,' ')
+      .split('\n').map(s=>s.trim()).filter(Boolean).join('\n');
+  };
+
+  // top-level shapes on the page
+  const shapesRoot=pageDoc.getElementsByTagName('Shapes')[0];
+  if(!shapesRoot)throw new Error('no shapes on page');
+  const nodes={}, conns={}, child2top={};
+  for(const sh of shapesRoot.children){
+    if(sh.tagName!=='Shape')continue;
+    const sid=sh.getAttribute('ID');
+    for(const sub of sh.getElementsByTagName('Shape'))child2top[sub.getAttribute('ID')]=sid;
+    const mn=mname[sh.getAttribute('Master')]||'';
+    if(VSDX_CONNECTOR.has(mn)){
+      conns[sid]={label:textOf(sh),bx:numCell(sh,'BeginX'),by:numCell(sh,'BeginY'),
+        ex:numCell(sh,'EndX'),ey:numCell(sh,'EndY')};
+      continue;
+    }
+    const typ=VSDX_MAP[mn];
+    if(!typ)continue;
+    const px=numCell(sh,'PinX'),py=numCell(sh,'PinY');
+    let w=numCell(sh,'Width'),h=numCell(sh,'Height');
+    const def=mwh[sh.getAttribute('Master')];
+    if((w==null||h==null)&&def){if(w==null)w=def[0];if(h==null)h=def[1];}
+    if(px==null||py==null||w==null||h==null)continue;
+    nodes[sid]={id:'n'+sid,type:typ,
+      x:Math.round((px-w/2)*VSDX_SCALE),y:Math.round((pageH-py-h/2)*VSDX_SCALE),
+      w:Math.round(w*VSDX_SCALE),h:Math.round(h*VSDX_SCALE),
+      text:textOf(sh),font:'Calibri,Arial,sans-serif',size:10,
+      bold:false,italic:false,under:false,margin:4};
+  }
+
+  // glued connections (exact), then geometric fallback for unglued ends
+  const begins={},ends={};
+  for(const c of pageDoc.getElementsByTagName('Connect')){
+    const top=child2top[c.getAttribute('ToSheet')]||c.getAttribute('ToSheet');
+    if(!(top in nodes))continue;
+    ((c.getAttribute('FromCell')||'').startsWith('Begin')?begins:ends)[c.getAttribute('FromSheet')]=top;
+  }
+  const nearest=(xin,yin)=>{
+    if(xin==null||yin==null)return null;
+    const px=xin*VSDX_SCALE, py=(pageH-yin)*VSDX_SCALE;
+    let best=null,bd=Infinity;
+    for(const [sid,n] of Object.entries(nodes)){
+      const dx=Math.max(n.x-px,0,px-(n.x+n.w)), dy=Math.max(n.y-py,0,py-(n.y+n.h));
+      const d=dx*dx+dy*dy;
+      if(d<bd){bd=d;best=sid;}
+    }
+    return bd<=50*50?best:null;
+  };
+  const edges=[]; let eid=1;
+  for(const [cid,info] of Object.entries(conns)){
+    let a=begins[cid]||nearest(info.bx,info.by);
+    let b=ends[cid]||nearest(info.ex,info.ey);
+    if(a&&b&&a!==b)edges.push({id:'e'+(eid++),from:'n'+a,to:'n'+b,label:(info.label||'').slice(0,40)});
+  }
+
+  const nl=Object.values(nodes);
+  if(!nl.length)throw new Error('no flowchart shapes recognized');
+  const minx=Math.min(...nl.map(n=>n.x))-60, miny=Math.min(...nl.map(n=>n.y))-60;
+  nl.forEach(n=>{n.x-=minx;n.y-=miny;});
+  return {nodes:nl,edges};
+}
+
+const vsdxFileInput=$('open-vsdx-file');
+$('btn-open-vsdx').addEventListener('click',()=>{
+  if(typeof DecompressionStream==='undefined'){
+    alert('Visio import needs a modern browser (Chrome, Edge, Firefox 113+, Safari 16.4+).');return;
+  }
+  vsdxFileInput.click();
+});
+vsdxFileInput.addEventListener('change',e=>{
+  const f=e.target.files[0]; if(!f)return;
+  const r=new FileReader();
+  r.onload=async()=>{
+    try{
+      const chart=await vsdxToChart(r.result);
+      loadChartData(chart);
+      const fitBtn=document.getElementById('btn-zoom-fit');
+      if(fitBtn)setTimeout(()=>fitBtn.click(),120); // large diagrams: show the whole chart
+    }catch(err){
+      alert('Could not import this file as a Visio flowchart ('+err.message+').\n\nSupported: .vsdx files whose first page uses standard flowchart shapes (process, decision, terminator, connectors, …).');
+    }
+  };
+  r.readAsArrayBuffer(f); vsdxFileInput.value='';
 });
 
 $('btn-export-json').addEventListener('click',()=>

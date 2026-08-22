@@ -215,8 +215,74 @@ const check = (name, ok, extra) => {
   check('11.1 memory monitor shows live stats', await st(() =>
     /Heap: .+ · Shapes: \d+ · Lines: \d+ · Undo: \d+\/50/.test(document.getElementById('mem-monitor').textContent)));
 
-  // ── 12. Stability ─────────────────────────────────────────
-  check('12.1 zero uncaught page errors across all tests', errors.length === 0, errors.join('; '));
+  // ── 12. Visio (.vsdx) import ──────────────────────────────
+  // Build a minimal synthetic .vsdx (a ZIP of XML) right here, so the test
+  // has no external fixtures.
+  const crc32 = buf => {
+    let c; const t = [];
+    for (let n = 0; n < 256; n++) { c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c; }
+    let crc = 0xFFFFFFFF;
+    for (const b of buf) crc = t[(crc ^ b) & 0xFF] ^ (crc >>> 8);
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  };
+  const makeZip = files => {
+    const chunks = [], central = []; let offset = 0;
+    for (const [name, text] of Object.entries(files)) {
+      const nameB = Buffer.from(name), data = Buffer.from(text);
+      const crc = crc32(data);
+      const lh = Buffer.alloc(30);
+      lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(20, 4); lh.writeUInt16LE(0, 8); // stored
+      lh.writeUInt32LE(crc, 14); lh.writeUInt32LE(data.length, 18); lh.writeUInt32LE(data.length, 22);
+      lh.writeUInt16LE(nameB.length, 26);
+      chunks.push(lh, nameB, data);
+      const cd = Buffer.alloc(46);
+      cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt16LE(20, 6); cd.writeUInt16LE(0, 10);
+      cd.writeUInt32LE(crc, 16); cd.writeUInt32LE(data.length, 20); cd.writeUInt32LE(data.length, 24);
+      cd.writeUInt16LE(nameB.length, 28); cd.writeUInt32LE(offset, 42);
+      central.push(Buffer.concat([cd, nameB]));
+      offset += 30 + nameB.length + data.length;
+    }
+    const cdBuf = Buffer.concat(central);
+    const eocd = Buffer.alloc(22);
+    eocd.writeUInt32LE(0x06054b50, 0);
+    eocd.writeUInt16LE(central.length, 8); eocd.writeUInt16LE(central.length, 10);
+    eocd.writeUInt32LE(cdBuf.length, 12); eocd.writeUInt32LE(offset, 16);
+    return Buffer.concat([...chunks, cdBuf, eocd]);
+  };
+  const vsdxPath = path.join(TMP, 'mini.vsdx');
+  fs.writeFileSync(vsdxPath, makeZip({
+    'visio/pages/pages.xml': "<Pages><Page><PageSheet><Cell N='PageWidth' V='8.5'/><Cell N='PageHeight' V='11'/></PageSheet></Page></Pages>",
+    'visio/masters/masters.xml': "<Masters><Master ID='1' NameU='Process'/><Master ID='2' NameU='Decision'/><Master ID='3' NameU='Dynamic connector'/></Masters>",
+    'visio/pages/page1.xml':
+      "<PageContents><Shapes>" +
+      "<Shape ID='10' Master='1' Type='Shape'><Cell N='PinX' V='2'/><Cell N='PinY' V='6'/><Cell N='Width' V='1.5'/><Cell N='Height' V='0.6'/><Text>Step A</Text></Shape>" +
+      "<Shape ID='11' Master='2' Type='Shape'><Cell N='PinX' V='2'/><Cell N='PinY' V='4'/><Cell N='Width' V='1.5'/><Cell N='Height' V='1'/><Text>OK?</Text></Shape>" +
+      "<Shape ID='12' Master='3' Type='Shape'><Cell N='BeginX' V='2'/><Cell N='BeginY' V='5.7'/><Cell N='EndX' V='2'/><Cell N='EndY' V='4.5'/><Text>Yes</Text></Shape>" +
+      "</Shapes><Connects>" +
+      "<Connect FromSheet='12' FromCell='BeginX' FromPart='9' ToSheet='10' ToCell='PinX' ToPart='3'/>" +
+      "<Connect FromSheet='12' FromCell='EndX' FromPart='12' ToSheet='11' ToCell='PinX' ToPart='3'/>" +
+      "</Connects></PageContents>",
+  }));
+  await page.setInputFiles('#open-vsdx-file', vsdxPath);
+  await page.waitForTimeout(800);
+  check('12.1 Visio .vsdx import loads shapes and text', await st(() =>
+    state.nodes.length === 2 &&
+    state.nodes.some(n => n.type === 'process' && n.text === 'Step A') &&
+    state.nodes.some(n => n.type === 'decision' && n.text === 'OK?')));
+  check('12.2 Visio glued connector becomes a labeled flowline', await st(() =>
+    state.edges.length === 1 && state.edges[0].label === 'Yes'));
+  const vId = await st(() => state.nodes[0].id);
+  b = await nodePos(vId); await dragNode(vId, 35, 20); a = await nodePos(vId);
+  check('12.3 imported Visio nodes are movable', a.x !== b.x || a.y !== b.y);
+  alerts.length = 0;
+  const badVsdx = path.join(TMP, 'bad.vsdx');
+  fs.writeFileSync(badVsdx, 'definitely not a zip archive');
+  await page.setInputFiles('#open-vsdx-file', badVsdx);
+  await page.waitForTimeout(500);
+  check('12.4 invalid .vsdx rejected with message', alerts.some(x => /Could not import/.test(x)));
+
+  // ── 13. Stability ─────────────────────────────────────────
+  check('13.1 zero uncaught page errors across all tests', errors.length === 0, errors.join('; '));
 
   await browser.close();
   console.log(`\n${pass} passed, ${fail} failed`);
