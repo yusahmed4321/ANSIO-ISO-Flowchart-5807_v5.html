@@ -33,6 +33,7 @@
   .tsel.w-font{width:110px}
   .tsel.w-size{width:54px}
   .zoom-badge{font-size:12px;color:var(--muted);min-width:40px;text-align:center;font-variant-numeric:tabular-nums}
+  #mem-monitor{font-size:11px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums;cursor:help}
   .spacer{flex:1}
   .margin-row{display:flex;align-items:center;gap:6px}
   #margin-range{width:72px;cursor:pointer;accent-color:var(--accent)}
@@ -42,7 +43,7 @@
   #hint-bar{
     display:flex;align-items:center;gap:8px;
     background:var(--panel-2);border:1px solid var(--border);
-    border-radius:6px;padding:4px 10px;
+    border-radius:6px;padding:3px 10px;
     font-size:11px;color:var(--muted);
     white-space:nowrap;flex-shrink:0;
   }
@@ -52,8 +53,10 @@
     font-family:ui-monospace,monospace;font-size:10px;color:var(--text);
     font-weight:600;
   }
-  #hint-bar .hk{display:flex;align-items:center;gap:3px}
-  #hint-bar .hk-sep{width:1px;height:14px;background:var(--border)}
+  /* Key chip on top, action label stacked underneath */
+  #hint-bar .hk{display:flex;flex-direction:column;align-items:center;gap:2px}
+  #hint-bar .hk-lbl{font-size:9.5px;line-height:1}
+  #hint-bar .hk-sep{width:1px;height:24px;background:var(--border)}
 
   /* ─── Main layout ───────────────────────────────────── */
   .main{flex:1;display:flex;min-height:0}
@@ -211,17 +214,14 @@
     <button class="tbtn" id="btn-zoom-fit" title="Fit to window">⊡</button>
     <button class="tbtn" id="btn-zoom-100" title="Reset 100%">1:1</button>
     <div class="spacer"></div>
-    <!-- Keyboard shortcuts hint bar replacing the old hint text -->
+    <!-- Save to PDF + keyboard shortcuts hint bar -->
+    <button class="tbtn" id="btn-export-pdf" title="Save flowchart as PDF (opens print dialog)">⤓ Save to PDF</button>
     <div id="hint-bar">
-      <div class="hk"><span class="kbd">Del</span><span>Delete</span></div>
+      <div class="hk"><span class="kbd">Esc</span><span class="hk-lbl">Cancel</span></div>
       <div class="hk-sep"></div>
-      <div class="hk"><span class="kbd">Esc</span><span>Cancel</span></div>
+      <div class="hk"><span class="kbd">Dbl-click</span><span class="hk-lbl">Edit text</span></div>
       <div class="hk-sep"></div>
-      <div class="hk"><span class="kbd">Dbl-click</span><span>Edit text</span></div>
-      <div class="hk-sep"></div>
-      <div class="hk"><span class="kbd">Ctrl ±</span><span>Zoom</span></div>
-      <div class="hk-sep"></div>
-      <div class="hk"><span class="kbd">Ctrl scroll</span><span>Zoom</span></div>
+      <div class="hk"><span class="kbd">Ctrl ±</span><span class="hk-lbl">Zoom</span></div>
     </div>
   </div>
 
@@ -256,6 +256,7 @@
     <div class="sep"></div>
     <span style="font-size:11px;color:var(--muted)">Shapes auto-expand · Ctrl+scroll to zoom</span>
     <div class="spacer"></div>
+    <span id="mem-monitor" title="Live diagnostics: JS heap used (Chrome/Edge only), shape/flowline counts and undo-history size. If shapes ever stop moving while these numbers stay small, the cause is editor state (e.g. Connect mode active), not memory."></span>
   </div>
 </div>
 
@@ -723,7 +724,7 @@ function _doRender(){
     const isAnno=a.type==='annotation'||b.type==='annotation';
 
     const hit=mkEl('line',{class:'edge-hit',x1:p1.x,y1:p1.y,x2:p2.x,y2:p2.y});
-    hit.addEventListener('click',ev=>{ev.stopPropagation();selectItem('edge',edge.id)});
+    hit.addEventListener('click',ev=>{ev.stopPropagation();if(consumeDragClick())return;selectItem('edge',edge.id)});
     edgesL.appendChild(hit);
 
     const ln=mkEl('line',{class:'edge-line'+(sel?' selected':'')+(isAnno?' annotation':''),
@@ -792,6 +793,10 @@ function _doRender(){
     g.addEventListener('mousedown',onNodeDown);
     g.addEventListener('click',ev=>{
       ev.stopPropagation();
+      if(consumeDragClick())return; // was a drag, not a click
+      // Fix #9: clicking a node while a palette shape is armed for placement
+      // cancels placement instead of leaving the mode stuck on.
+      if(pendingType){pendingType=null;canvasOuter.classList.remove('placing');}
       state.tool==='connect'?doConnect(node.id):selectItem('node',node.id);
     });
     g.addEventListener('dblclick',ev=>{ev.stopPropagation();startEdit(node)});
@@ -834,21 +839,35 @@ function mkEl(tag,attrs={}){
 // ─────────────────────────────────────────────────────
 //  Drag to move
 // ─────────────────────────────────────────────────────
+// Fix #7: nodes are draggable in EVERY tool mode (Visio-like behavior).
+// Previously onNodeDown bailed out unless state.tool==='select', so leaving
+// the Connect tool active silently froze the whole chart. Now a mousedown+move
+// always moves the node; a plain click (below the 4px threshold) still performs
+// the current tool's click action (connect / select).
 let drag=null;
+let dragMoved=false; // true once the pointer travels past the click threshold
+const DRAG_THRESHOLD=4; // px in screen space
 // Fix #1 & #2: guard flag so render() is only called once per animation frame during drag
 let _rafDragPending=false;
 function onNodeDown(ev){
-  if(state.tool!=='select')return;
   const id=ev.currentTarget.dataset.id;
   const n=state.nodes.find(x=>x.id===id); if(!n)return;
-  selectItem('node',id);
+  if(state.tool==='select') selectItem('node',id);
   const p=svgPt(ev.clientX,ev.clientY);
-  drag={id,ox:p.x-n.x,oy:p.y-n.y};
+  drag={id,ox:p.x-n.x,oy:p.y-n.y,sx:ev.clientX,sy:ev.clientY};
+  dragMoved=false;
   ev.preventDefault();
 }
 window.addEventListener('mousemove',ev=>{
   if(!drag)return;
   const n=state.nodes.find(x=>x.id===drag.id); if(!n)return;
+  if(!dragMoved){
+    if(Math.abs(ev.clientX-drag.sx)+Math.abs(ev.clientY-drag.sy)<DRAG_THRESHOLD)return;
+    dragMoved=true;
+    // A drag that starts in connect mode moves the node — select it so the
+    // inspector follows, and drop any half-made connection.
+    if(state.tool==='connect'){state.connectFrom=null;selectItem('node',drag.id);}
+  }
   const p=svgPt(ev.clientX,ev.clientY);
   n.x=Math.round(p.x-drag.ox); n.y=Math.round(p.y-drag.oy);
   // Throttle: only re-render once per animation frame, not on every pixel
@@ -861,7 +880,21 @@ window.addEventListener('mousemove',ev=>{
     });
   }
 });
-window.addEventListener('mouseup',()=>{if(drag){saveSnapshot();}drag=null;_rafDragPending=false;});
+function endDrag(){
+  if(drag&&dragMoved)saveSnapshot();
+  drag=null;_rafDragPending=false;
+}
+window.addEventListener('mouseup',endDrag);
+// Fix #8: releasing the mouse outside the window used to leave the node glued
+// to the cursor ("sticky drag"). Ending the drag on window blur prevents that.
+window.addEventListener('blur',endDrag);
+// One click event (real or browser-synthesized after the drag re-render) may
+// follow a completed drag; consume the dragMoved flag so it is not treated as
+// a tool action. Reset happens on the next mousedown either way.
+function consumeDragClick(){
+  if(dragMoved){dragMoved=false;return true;}
+  return false;
+}
 
 // ─────────────────────────────────────────────────────
 //  Connect tool
@@ -890,6 +923,7 @@ function selectItem(kind,id){
 }
 svg.addEventListener('click',ev=>{
   if(ev.target===svg||ev.target===canvasOuter){
+    if(dragMoved)return; // post-drag synthesized click — don't deselect
     state.selected=null; state.connectFrom=null; render(); syncInspector();
   }
 });
@@ -911,8 +945,10 @@ function startEdit(node){
   if(node.under) ta.style.textDecoration='underline';
   document.body.appendChild(ta); ta.focus(); ta.select();
   const done=()=>{
+    const changed=(node.text||'')!==ta.value;
     node.text=ta.value;
     autoSize(node); ta.remove(); render(); syncInspector();
+    if(changed)saveSnapshot(); // text edits join the undo history
   };
   ta.addEventListener('blur',done);
   ta.addEventListener('keydown',e=>{
@@ -1123,6 +1159,7 @@ canvasOuter.addEventListener('drop',e=>{
   const p=svgPt(e.clientX,e.clientY); addNode(t,p.x,p.y);
 });
 canvasOuter.addEventListener('click',e=>{
+  if(consumeDragClick())return; // post-drag synthesized click must not place a shape
   if(!pendingType)return;
   const p=svgPt(e.clientX,e.clientY);
   addNode(pendingType,p.x,p.y);
@@ -1191,6 +1228,26 @@ $('btn-export-png').addEventListener('click',()=>{
   };
   img.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(xml);
 });
+// Save to PDF — renders the standalone SVG in a print window; the browser's
+// print dialog lets the user choose "Save as PDF". No external libraries needed.
+$('btn-export-pdf').addEventListener('click',()=>{
+  const o=standaloneSVG(); if(!o){alert('Add a shape first.');return;}
+  const xml=new XMLSerializer().serializeToString(o);
+  const win=window.open('','_blank');
+  if(!win){alert('Pop-up blocked — please allow pop-ups for this page to save as PDF.');return;}
+  win.document.write('<!DOCTYPE html><html><head><title>flowchart</title>'
+    +'<style>body{margin:0;padding:16px;display:flex;justify-content:center}'
+    +'svg{max-width:100%;height:auto}'
+    +'.node-shape{fill:#fff;stroke:#374151;stroke-width:1.6;stroke-linejoin:round}'
+    +'.edge-line{stroke:#374151;stroke-width:1.6;fill:none}'
+    +'.edge-line.annotation{stroke-dasharray:5 4}'
+    +'.edge-label{font:11px system-ui,sans-serif;fill:#6b7280;text-anchor:middle;paint-order:stroke;stroke:#fff;stroke-width:4}'
+    +'@page{size:auto;margin:12mm}</style></head><body>'+xml+'</body></html>');
+  win.document.close();
+  win.focus();
+  setTimeout(()=>win.print(),350);
+});
+
 $('btn-export-json').addEventListener('click',()=>
   dl('flowchart.json',new Blob([JSON.stringify({nodes:state.nodes,edges:state.edges},null,2)],{type:'application/json'}))
 );
@@ -1216,6 +1273,27 @@ function dl(name,blob){
   a.href=u; a.download=name; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(u),1500);
 }
+
+// ─────────────────────────────────────────────────────
+//  Memory / state monitor
+//  Diagnostic readout: JS heap in use (Chrome/Edge expose
+//  performance.memory; other browsers show n/a), plus live counts of
+//  shapes, flowlines and undo-history snapshots. If shapes ever feel
+//  "locked" while these numbers stay small, the cause is editor state
+//  (tool mode), not memory pressure.
+// ─────────────────────────────────────────────────────
+const memMon=$('mem-monitor');
+function updateMemMonitor(){
+  if(!memMon)return;
+  const heap=(performance&&performance.memory)
+    ?(performance.memory.usedJSHeapSize/1048576).toFixed(1)+' MB'
+    :'n/a';
+  const histKB=(history.stack.reduce((a,s)=>a+s.length,0)/1024).toFixed(1);
+  memMon.textContent=
+    `Heap: ${heap} · Shapes: ${state.nodes.length} · Lines: ${state.edges.length}`+
+    ` · Undo: ${history.stack.length}/${history.maxSize} (${histKB} KB)`;
+}
+setInterval(updateMemMonitor,2000);
 
 // ─────────────────────────────────────────────────────
 //  Load sample chart
@@ -1244,6 +1322,7 @@ function dl(name,blob){
   ];
   state.nextId=20; render();
   saveSnapshot();
+  updateMemMonitor();
 })();
 </script>
 </body>
