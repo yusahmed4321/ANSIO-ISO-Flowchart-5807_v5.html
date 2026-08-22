@@ -205,8 +205,10 @@
     <button class="tbtn" id="btn-export-svg">⤓ SVG</button>
     <button class="tbtn" id="btn-export-png">⤓ PNG</button>
     <button class="tbtn" id="btn-export-json">⤓ JSON</button>
-    <button class="tbtn" id="btn-import-json">⤒ Import</button>
+    <button class="tbtn" id="btn-import-json" title="Import a flowchart .json file">⤒ Import</button>
     <input type="file" id="import-file" accept=".json" style="display:none">
+    <button class="tbtn" id="btn-open-pdf" title="Open a PDF saved by this editor — the flowchart inside is restored for editing">⤒ Open PDF</button>
+    <input type="file" id="open-pdf-file" accept=".pdf,application/pdf" style="display:none">
     <div class="sep"></div>
     <button class="tbtn" id="btn-zoom-out" title="Zoom Out (Ctrl −)">−</button>
     <span class="zoom-badge" id="zoom-badge">100%</span>
@@ -1075,24 +1077,29 @@ function applyBoldToSelection(){
   render();
 }
 
+// Fix #10 (cont.): style changes join the undo history too
+function snapIfNode(){if(state.selected&&state.selected.kind==='node')saveSnapshot();}
+
 // Toolbar font controls
-$('tb-font-family').addEventListener('change',()=>applyFont('toolbar'));
-$('tb-font-size')  .addEventListener('change',()=>applyFont('toolbar'));
-$('tb-bold')  .addEventListener('click',()=>{ applyBoldToSelection(); });
-$('tb-italic').addEventListener('click',()=>{$('tb-italic').classList.toggle('on');applyFont('toolbar')});
-$('tb-under') .addEventListener('click',()=>{$('tb-under').classList.toggle('on'); applyFont('toolbar')});
+$('tb-font-family').addEventListener('change',()=>{applyFont('toolbar');snapIfNode();});
+$('tb-font-size')  .addEventListener('change',()=>{applyFont('toolbar');snapIfNode();});
+$('tb-bold')  .addEventListener('click',()=>{ applyBoldToSelection(); snapIfNode(); });
+$('tb-italic').addEventListener('click',()=>{$('tb-italic').classList.toggle('on');applyFont('toolbar');snapIfNode()});
+$('tb-under') .addEventListener('click',()=>{$('tb-under').classList.toggle('on'); applyFont('toolbar');snapIfNode()});
+$('margin-range').addEventListener('change',snapIfNode);
 $('margin-range').addEventListener('input',()=>{
   $('margin-lbl').textContent=$('margin-range').value;
   applyFont('toolbar');
 });
 
 // Inspector font controls
-inspFF.addEventListener('change',()=>applyFont('inspector'));
-inspFS.addEventListener('change',()=>applyFont('inspector'));
-inspBold  .addEventListener('click',()=>{ applyBoldToSelection(); });
-inspItalic.addEventListener('click',()=>{inspItalic.classList.toggle('on');applyFont('inspector')});
-inspUnder .addEventListener('click',()=>{inspUnder.classList.toggle('on'); applyFont('inspector')});
+inspFF.addEventListener('change',()=>{applyFont('inspector');snapIfNode();});
+inspFS.addEventListener('change',()=>{applyFont('inspector');snapIfNode();});
+inspBold  .addEventListener('click',()=>{ applyBoldToSelection(); snapIfNode(); });
+inspItalic.addEventListener('click',()=>{inspItalic.classList.toggle('on');applyFont('inspector');snapIfNode()});
+inspUnder .addEventListener('click',()=>{inspUnder.classList.toggle('on'); applyFont('inspector');snapIfNode()});
 inspMg.addEventListener('input',()=>{inspMgLbl.textContent=inspMg.value+'px'; applyFont('inspector')});
+inspMg.addEventListener('change',snapIfNode);
 
 // Inspector geometry / text
 // Fix #4: debounce render on rapid keystrokes — only re-render 80ms after typing stops
@@ -1116,6 +1123,11 @@ let _inspGeomTimer=null;
   clearTimeout(_inspGeomTimer);
   _inspGeomTimer=setTimeout(()=>render(), 80);
 }));
+// Fix #10: geometry edits are committed to the undo history when the field
+// change completes (previously they were invisible to undo/redo).
+[inspX,inspY,inspW,inspH].forEach(el=>el.addEventListener('change',()=>{
+  if(state.selected&&state.selected.kind==='node')saveSnapshot();
+}));
 let _inspEdgeTimer=null;
 inspEdgeLbl.addEventListener('input',()=>{
   if(!state.selected||state.selected.kind!=='edge')return;
@@ -1123,6 +1135,9 @@ inspEdgeLbl.addEventListener('input',()=>{
   e.label=inspEdgeLbl.value;
   clearTimeout(_inspEdgeTimer);
   _inspEdgeTimer=setTimeout(()=>render(), 80);
+});
+inspEdgeLbl.addEventListener('change',()=>{
+  if(state.selected&&state.selected.kind==='edge')saveSnapshot();
 });
 
 // ─────────────────────────────────────────────────────
@@ -1228,43 +1243,245 @@ $('btn-export-png').addEventListener('click',()=>{
   };
   img.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(xml);
 });
-// Save to PDF — renders the standalone SVG in a print window; the browser's
-// print dialog lets the user choose "Save as PDF". No external libraries needed.
+// ─────────────────────────────────────────────────────
+//  PDF writer — builds a real vector PDF entirely in the browser,
+//  no libraries. The editor's full JSON is embedded inside the PDF
+//  (between %FLOWJSONv1: … :ENDFLOWJSON% sentinels in a stream object),
+//  so any PDF saved here reopens losslessly via "Open PDF".
+//  Users therefore never have to handle .json files at all.
+// ─────────────────────────────────────────────────────
+const PDF_SENTINEL=/%FLOWJSONv1:([A-Za-z0-9+/=]+):ENDFLOWJSON%/;
+const _r2=v=>Math.round(v*100)/100;
+
+function pdfEsc(s){
+  let out='';
+  for(const ch of String(s)){
+    const c=ch.charCodeAt(0);
+    if(ch==='\\'||ch==='('||ch===')') out+='\\'+ch;
+    else if(c<32) out+=' ';
+    else if(c>255) out+='?'; // outside Latin-1 — base-14 fonts can't show it
+    else out+=ch;
+  }
+  return out;
+}
+
+// width of a text run in the PDF page font (Helvetica family)
+function helvW(text,size,bold,italic){
+  _mc.font=`${bold?'bold ':''}${italic?'italic ':''}${size}px Helvetica, Arial, sans-serif`;
+  return _mc.measureText(text).width;
+}
+const pdfFontRef=(b,i)=>b&&i?'/F4':b?'/F2':i?'/F3':'/F1';
+
+// split a label line into normal/**bold** runs (same markup render() uses)
+function lineRuns(line,baseBold){
+  const runs=[];
+  line.split(/(\*\*[^*]+\*\*)/g).forEach(part=>{
+    if(!part)return;
+    const m=/^\*\*(.+)\*\*$/.exec(part);
+    runs.push({text:m?m[1]:part,bold:!!m||baseBold});
+  });
+  return runs;
+}
+
+// SVG arc → cubic béziers (standard endpoint→center conversion, ≤90° segments)
+function _vecAngle(ux,uy,vx,vy){
+  const dot=ux*vx+uy*vy, len=Math.sqrt((ux*ux+uy*uy)*(vx*vx+vy*vy));
+  let ang=Math.acos(Math.min(1,Math.max(-1,dot/(len||1))));
+  if(ux*vy-uy*vx<0)ang=-ang;
+  return ang;
+}
+function arcToCubics(x1,y1,rx,ry,phiDeg,fa,fs,x2,y2){
+  rx=Math.abs(rx);ry=Math.abs(ry);
+  if(!rx||!ry)return[[x1,y1,x2,y2,x2,y2]];
+  const phi=phiDeg*Math.PI/180,cosp=Math.cos(phi),sinp=Math.sin(phi);
+  const dx=(x1-x2)/2,dy=(y1-y2)/2;
+  const x1p=cosp*dx+sinp*dy,y1p=-sinp*dx+cosp*dy;
+  const lam=x1p*x1p/(rx*rx)+y1p*y1p/(ry*ry);
+  if(lam>1){const s=Math.sqrt(lam);rx*=s;ry*=s;}
+  let num=rx*rx*ry*ry-rx*rx*y1p*y1p-ry*ry*x1p*x1p; if(num<0)num=0;
+  const den=rx*rx*y1p*y1p+ry*ry*x1p*x1p;
+  const co=(fa===fs?-1:1)*Math.sqrt(den?num/den:0);
+  const cxp=co*rx*y1p/ry, cyp=-co*ry*x1p/rx;
+  const cx=cosp*cxp-sinp*cyp+(x1+x2)/2, cy=sinp*cxp+cosp*cyp+(y1+y2)/2;
+  const th1=_vecAngle(1,0,(x1p-cxp)/rx,(y1p-cyp)/ry);
+  let dth=_vecAngle((x1p-cxp)/rx,(y1p-cyp)/ry,(-x1p-cxp)/rx,(-y1p-cyp)/ry);
+  if(!fs&&dth>0)dth-=2*Math.PI;
+  if(fs&&dth<0)dth+=2*Math.PI;
+  const segs=Math.max(1,Math.ceil(Math.abs(dth)/(Math.PI/2))), delta=dth/segs;
+  const t=4/3*Math.tan(delta/4), out=[];
+  let th=th1,px=x1,py=y1;
+  for(let i=0;i<segs;i++){
+    const th2=th+delta;
+    const c1=Math.cos(th),s1=Math.sin(th),c2=Math.cos(th2),s2=Math.sin(th2);
+    const ex=cx+rx*c2*cosp-ry*s2*sinp, ey=cy+rx*c2*sinp+ry*s2*cosp;
+    const d1x=-rx*s1*cosp-ry*c1*sinp, d1y=-rx*s1*sinp+ry*c1*cosp;
+    const d2x=-rx*s2*cosp-ry*c2*sinp, d2y=-rx*s2*sinp+ry*c2*cosp;
+    out.push([px+t*d1x,py+t*d1y,ex-t*d2x,ey-t*d2y,ex,ey]);
+    th=th2;px=ex;py=ey;
+  }
+  return out;
+}
+
+// Interpret the SVG path data used by SHAPES (M L H V C A Z, abs/rel)
+// and emit PDF path operators through the page-coordinate transform.
+function svgPathToPdf(d,offX,offY,tx,ty){
+  const tok=d.match(/[MLHVCAZmlhvcaz]|-?\d*\.?\d+(?:e-?\d+)?/gi)||[];
+  let i=0,cmd='',x=0,y=0,sx=0,sy=0,out='';
+  const num=()=>parseFloat(tok[i++]);
+  const pt=(px,py)=>`${_r2(tx(px+offX))} ${_r2(ty(py+offY))}`;
+  while(i<tok.length){
+    if(/^[a-z]$/i.test(tok[i])){
+      cmd=tok[i++];
+      if(cmd==='Z'||cmd==='z'){out+='h\n';x=sx;y=sy;continue;}
+    }
+    const rel=cmd===cmd.toLowerCase();
+    switch(cmd.toUpperCase()){
+      case 'M':{const nx=num(),ny=num();x=rel?x+nx:nx;y=rel?y+ny:ny;sx=x;sy=y;out+=pt(x,y)+' m\n';cmd=rel?'l':'L';break;}
+      case 'L':{const nx=num(),ny=num();x=rel?x+nx:nx;y=rel?y+ny:ny;out+=pt(x,y)+' l\n';break;}
+      case 'H':{const nx=num();x=rel?x+nx:nx;out+=pt(x,y)+' l\n';break;}
+      case 'V':{const ny=num();y=rel?y+ny:ny;out+=pt(x,y)+' l\n';break;}
+      case 'C':{const a=num(),b=num(),c=num(),dd=num(),e=num(),f=num();
+        const p=rel?[a+x,b+y,c+x,dd+y,e+x,f+y]:[a,b,c,dd,e,f];
+        out+=pt(p[0],p[1])+' '+pt(p[2],p[3])+' '+pt(p[4],p[5])+' c\n';x=p[4];y=p[5];break;}
+      case 'A':{const rx=num(),ry=num(),rot=num(),fa=num(),fs=num(),nx=num(),ny=num();
+        const ex=rel?x+nx:nx, ey=rel?y+ny:ny;
+        arcToCubics(x,y,rx,ry,rot,fa,fs,ex,ey).forEach(cv=>{
+          out+=pt(cv[0],cv[1])+' '+pt(cv[2],cv[3])+' '+pt(cv[4],cv[5])+' c\n';
+        });
+        x=ex;y=ey;break;}
+      default:i++; // unsupported command — skip token defensively
+    }
+  }
+  return out;
+}
+
+function buildFlowchartPDF(){
+  if(!state.nodes.length)return null;
+  let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+  state.nodes.forEach(n=>{x0=Math.min(x0,n.x);y0=Math.min(y0,n.y);x1=Math.max(x1,n.x+n.w);y1=Math.max(y1,n.y+n.h)});
+  const PAD=24, W=_r2(x1-x0+2*PAD), H=_r2(y1-y0+2*PAD);
+  const tx=v=>v-x0+PAD, ty=v=>H-(v-y0+PAD); // SVG y-down → PDF y-up
+  let cs='1 j 1 J\n';
+
+  // Flowlines first (same paint order as the editor)
+  state.edges.forEach(edge=>{
+    const a=state.nodes.find(n=>n.id===edge.from), b=state.nodes.find(n=>n.id===edge.to);
+    if(!a||!b)return;
+    const[p1,p2]=edgePts(a,b);
+    const isAnno=a.type==='annotation'||b.type==='annotation';
+    cs+='q 1.6 w 0.216 0.255 0.318 RG\n';
+    if(isAnno)cs+='[5 4] 0 d\n';
+    cs+=`${_r2(tx(p1.x))} ${_r2(ty(p1.y))} m ${_r2(tx(p2.x))} ${_r2(ty(p2.y))} l S\n`;
+    if(!isAnno){ // arrowhead: same geometry as the SVG marker (9×6 @ stroke 1.6)
+      const dx=p2.x-p1.x,dy=p2.y-p1.y,len=Math.hypot(dx,dy)||1;
+      const ux=dx/len,uy=dy/len,L=14.4,HW=4.8;
+      const bx=p2.x-L*ux,by=p2.y-L*uy;
+      cs+='0.216 0.255 0.318 rg\n';
+      cs+=`${_r2(tx(p2.x))} ${_r2(ty(p2.y))} m ${_r2(tx(bx-HW*uy))} ${_r2(ty(by+HW*ux))} l ${_r2(tx(bx+HW*uy))} ${_r2(ty(by-HW*ux))} l f\n`;
+    }
+    cs+='Q\n';
+    if(edge.label){
+      const mx=(p1.x+p2.x)/2, my=(p1.y+p2.y)/2-5;
+      const lw=helvW(edge.label,11,false,false);
+      cs+=`BT /F1 11 Tf 0.42 0.447 0.502 rg ${_r2(tx(mx-lw/2))} ${_r2(ty(my))} Td (${pdfEsc(edge.label)}) Tj ET\n`;
+    }
+  });
+
+  // Shapes + labels
+  state.nodes.forEach(n=>{
+    const def=SHAPES[n.type];
+    cs+='q 1.6 w 0.216 0.255 0.318 RG 1 1 1 rg\n';
+    cs+=svgPathToPdf(def.path(n.w,n.h),n.x,n.y,tx,ty);
+    cs+=(def.openShape?'S':'B')+'\nQ\n';
+    const size=n.size||12, lh=size*1.45;
+    const lines=(n.text||'').split('\n'), totalH=lines.length*lh;
+    cs+='0.102 0.122 0.180 rg\n';
+    lines.forEach((line,i)=>{
+      const runs=lineRuns(line,n.bold||false);
+      const wSum=runs.reduce((acc,r)=>acc+helvW(r.text,size,r.bold,n.italic||false),0);
+      let cx=n.x+n.w/2-wSum/2;
+      const baseY=n.y+n.h/2-totalH/2+lh*0.5+i*lh+size*0.35; // baseline ≈ visual middle
+      runs.forEach(r=>{
+        const rw=helvW(r.text,size,r.bold,n.italic||false);
+        if(r.text)cs+=`BT ${pdfFontRef(r.bold,n.italic||false)} ${size} Tf ${_r2(tx(cx))} ${_r2(ty(baseY))} Td (${pdfEsc(r.text)}) Tj ET\n`;
+        cx+=rw;
+      });
+      if(n.under&&wSum>0)
+        cs+=`q 0.8 w 0.102 0.122 0.180 RG ${_r2(tx(n.x+n.w/2-wSum/2))} ${_r2(ty(baseY+2))} m ${_r2(tx(n.x+n.w/2+wSum/2))} ${_r2(ty(baseY+2))} l S Q\n`;
+    });
+  });
+
+  // Embedded editor data (referenced from the Catalog so tools keep it)
+  const json=JSON.stringify({nodes:state.nodes,edges:state.edges});
+  const payload='%FLOWJSONv1:'+btoa(unescape(encodeURIComponent(json)))+':ENDFLOWJSON%';
+
+  let pdf='%PDF-1.4\n%âãÏÓ\n';
+  const offsets=[0];
+  const add=s=>{offsets.push(pdf.length);pdf+=s;};
+  add('1 0 obj\n<< /Type /Catalog /Pages 2 0 R /FlowchartData 9 0 R >>\nendobj\n');
+  add('2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n');
+  add(`3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R /F4 8 0 R >> >> >>\nendobj\n`);
+  add(`4 0 obj\n<< /Length ${cs.length} >>\nstream\n${cs}endstream\nendobj\n`);
+  ['Helvetica','Helvetica-Bold','Helvetica-Oblique','Helvetica-BoldOblique'].forEach((f,ix)=>
+    add(`${5+ix} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /${f} /Encoding /WinAnsiEncoding >>\nendobj\n`));
+  add(`9 0 obj\n<< /Length ${payload.length} >>\nstream\n${payload}\nendstream\nendobj\n`);
+  const xref=pdf.length;
+  pdf+='xref\n0 10\n0000000000 65535 f \n';
+  for(let i=1;i<=9;i++)pdf+=String(offsets[i]).padStart(10,'0')+' 00000 n \n';
+  pdf+=`trailer\n<< /Size 10 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  const bytes=new Uint8Array(pdf.length);
+  for(let i=0;i<pdf.length;i++)bytes[i]=pdf.charCodeAt(i)&0xff;
+  return bytes;
+}
+
+// Save to PDF — downloads flowchart.pdf (vector drawing + embedded data)
 $('btn-export-pdf').addEventListener('click',()=>{
-  const o=standaloneSVG(); if(!o){alert('Add a shape first.');return;}
-  const xml=new XMLSerializer().serializeToString(o);
-  const win=window.open('','_blank');
-  if(!win){alert('Pop-up blocked — please allow pop-ups for this page to save as PDF.');return;}
-  win.document.write('<!DOCTYPE html><html><head><title>flowchart</title>'
-    +'<style>body{margin:0;padding:16px;display:flex;justify-content:center}'
-    +'svg{max-width:100%;height:auto}'
-    +'.node-shape{fill:#fff;stroke:#374151;stroke-width:1.6;stroke-linejoin:round}'
-    +'.edge-line{stroke:#374151;stroke-width:1.6;fill:none}'
-    +'.edge-line.annotation{stroke-dasharray:5 4}'
-    +'.edge-label{font:11px system-ui,sans-serif;fill:#6b7280;text-anchor:middle;paint-order:stroke;stroke:#fff;stroke-width:4}'
-    +'@page{size:auto;margin:12mm}</style></head><body>'+xml+'</body></html>');
-  win.document.close();
-  win.focus();
-  setTimeout(()=>win.print(),350);
+  const bytes=buildFlowchartPDF();
+  if(!bytes){alert('Add a shape first.');return;}
+  dl('flowchart.pdf',new Blob([bytes],{type:'application/pdf'}));
+});
+
+// Open PDF — restores the flowchart embedded in a PDF saved by this editor
+const pdfFileInput=$('open-pdf-file');
+$('btn-open-pdf').addEventListener('click',()=>pdfFileInput.click());
+pdfFileInput.addEventListener('change',e=>{
+  const f=e.target.files[0]; if(!f)return;
+  const r=new FileReader();
+  r.onload=()=>{
+    const text=new TextDecoder('latin1').decode(new Uint8Array(r.result));
+    const m=text.match(PDF_SENTINEL);
+    if(m){
+      try{
+        loadChartData(JSON.parse(decodeURIComponent(escape(atob(m[1])))));
+      }catch{alert('This PDF contains flowchart data, but it could not be read (the file may have been re-saved by another program).');}
+    }else if(text.startsWith('%PDF')){
+      alert('This is a valid PDF, but it was not created by this editor, so it carries no embedded flowchart data.\n\nReading an arbitrary PDF drawing (e.g. a Visio export or a scan) would require heavy PDF-interpretation/OCR software that cannot run inside this offline single-file app.\n\nTip: flowcharts saved here with "Save to PDF" contain their full editable data and reopen perfectly with this button.');
+    }else{
+      alert('Not a PDF file.');
+    }
+  };
+  r.readAsArrayBuffer(f); pdfFileInput.value='';
 });
 
 $('btn-export-json').addEventListener('click',()=>
   dl('flowchart.json',new Blob([JSON.stringify({nodes:state.nodes,edges:state.edges},null,2)],{type:'application/json'}))
 );
+// Shared loader used by both JSON import and Open PDF
+function loadChartData(d){
+  if(!d||!Array.isArray(d.nodes)||!Array.isArray(d.edges))throw new Error('bad data');
+  state.nodes=d.nodes; state.edges=d.edges;
+  const ids=[...d.nodes,...d.edges].map(o=>parseInt((o.id||'').replace(/^[a-z]+/i,''))).filter(n=>!isNaN(n));
+  state.nextId=(ids.length?Math.max(...ids):0)+1;
+  state.selected=null; render(); syncInspector(); saveSnapshot();
+}
 const impFile=$('import-file');
 $('btn-import-json').addEventListener('click',()=>impFile.click());
 impFile.addEventListener('change',e=>{
   const f=e.target.files[0]; if(!f)return;
   const r=new FileReader();
   r.onload=()=>{
-    try{
-      const d=JSON.parse(r.result);
-      if(!d.nodes||!d.edges)throw new Error();
-      state.nodes=d.nodes; state.edges=d.edges;
-      const ids=[...d.nodes,...d.edges].map(o=>parseInt((o.id||'').replace(/^[a-z]+/i,''))).filter(n=>!isNaN(n));
-      state.nextId=(ids.length?Math.max(...ids):0)+1;
-      state.selected=null; render(); syncInspector(); saveSnapshot();
-    }catch{alert('Invalid flowchart JSON file.');}
+    try{loadChartData(JSON.parse(r.result));}
+    catch{alert('Invalid flowchart JSON file.');}
   };
   r.readAsText(f); impFile.value='';
 });
